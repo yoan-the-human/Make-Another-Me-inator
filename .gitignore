@@ -7,3 +7,5 @@ venv/
 /tasks/*
 
 /project_description.txt
+
+/putty_claude.log
