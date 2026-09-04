@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import re
 import ctypes
 from ctypes import wintypes
 from pathlib import Path
