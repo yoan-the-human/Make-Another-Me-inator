@@ -129,10 +129,10 @@ echo "{push_marker}" """
     if not push_ok:
         print("[WARNING] Push marker did not confirm within timeout. Please inspect Git PuTTY window.")
 
-    # 7. In Git PuTTY: cleanup worktree
-    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR} and removing worktree...")
+    # 7. In Git PuTTY: cleanup worktree and delete local branch
+    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree and deleting local branch...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} && echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} && git branch -D {branch_name} ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
