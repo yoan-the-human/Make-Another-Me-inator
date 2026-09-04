@@ -143,7 +143,8 @@ class LogWatcher:
             except Exception:
                 pass
         
-        print(f"[CLAUDE MONITOR] Watching Claude output (will complete after {idle_seconds}s of silence and prompt return)...")
+        print(f"[CLAUDE MONITOR] Watching Claude output (will complete when Claude returns prompt)...")
+        stable_done_count = 0
         
         while time.time() - start_time < max_timeout:
             chunk = self.get_new_text()
@@ -164,6 +165,7 @@ class LogWatcher:
             if chunk or screen_changed:
                 had_output = True
                 last_change_time = current_time
+                stable_done_count = 0
                 if chunk:
                     recent_buffer = (recent_buffer + chunk)[-4000:]
                 if progress_callback and chunk:
@@ -175,28 +177,37 @@ class LogWatcher:
                 idle_duration = current_time - last_change_time
                 
                 # Check if Claude is still actively processing
+                # Claude ONLY displays 'esc to interrupt' in bottom status lines while busy
                 is_busy = False
+                has_done = False
+                has_prompt = False
+                
                 if curr_screen:
-                    low = curr_screen.lower()
-                    if "esc to interrupt" in low or "thinking" in low or "running" in low:
-                        is_busy = True
+                    lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
+                    bottom_lines = lines[-12:]
+                    is_busy = any("esc to interrupt" in l.lower() for l in lines)
+                    has_done = any("· done" in l for l in bottom_lines)
+                    has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
                 
                 # Check for permission prompt
-                if "yes/no" in recent_buffer.lower() or ("allow" in recent_buffer.lower() and "[y/n]" in recent_buffer.lower()):
+                if curr_screen:
+                    bottom_text = " ".join(lines[-10:]).lower() if 'lines' in locals() else ""
+                    if any(q in bottom_text for q in ["allow?", "[y/n]", "(y/n)", "yes/no"]):
+                        print("\n[WARNING] Claude may be waiting for a permission confirmation! (Check Claude PuTTY window)")
+                elif "yes/no" in recent_buffer.lower() or ("allow" in recent_buffer.lower() and "[y/n]" in recent_buffer.lower()):
                     print("\n[WARNING] Claude may be waiting for a permission confirmation! (Check Claude PuTTY window)")
                 
-                # Check completion: quiet for idle_seconds after activity, and NOT busy
-                if had_output and not is_busy and idle_duration >= idle_seconds:
-                    screen_has_prompt = False
-                    if curr_screen:
-                        lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
-                        # Does last line or near last line contain input prompt ❯?
-                        screen_has_prompt = any(l.startswith("❯") or l == "❯" for l in lines[-5:])
-                            
+                # Check completion:
+                # 1) If we see "· done" and prompt "❯" with NO "esc to interrupt", Claude is done!
+                # 2) Or if prompt "❯" is present and idle for >= idle_seconds with NO "esc to interrupt"
+                if not is_busy and (has_done or has_prompt):
+                    stable_done_count += 1
+                    if stable_done_count >= 3:
+                        print(f"\n[CLAUDE MONITOR] ✅ Claude has completed the task! (Prompt returned, idle for {int(idle_duration)}s)")
+                        return True
+                elif had_output and not is_busy and idle_duration >= idle_seconds:
                     indicators = ["❯", "? for", "Cost:", "duration", "╭─", "╰─", "bypass permissions"]
-                    has_prompt = screen_has_prompt or any(ind in recent_buffer for ind in indicators)
-                    
-                    if has_prompt:
+                    if any(ind in recent_buffer for ind in indicators) or has_prompt:
                         print(f"\n[CLAUDE MONITOR] ✅ Claude has completed the task! (Prompt returned, idle for {int(idle_duration)}s)")
                         return True
 

@@ -27,6 +27,16 @@ CACHE_FILE = config.BASE_DIR / ".putty_cache.json"
 
 user32 = ctypes.windll.user32
 
+def ensure_desktop():
+    """Ensure thread is attached to the interactive Default desktop."""
+    try:
+        hdesk = win32service.OpenDesktop("Default", 0, False, win32con.MAXIMUM_ALLOWED)
+        ctypes.windll.user32.SetThreadDesktop(int(hdesk))
+    except Exception:
+        pass
+
+ensure_desktop()
+
 # Win32 Input structures
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
@@ -142,15 +152,26 @@ def activate_window(hwnd: int) -> bool:
 def capture_screen_text(hwnd: int) -> str:
     """Capture all visible text from a PuTTY window using native IDM_COPYALL."""
     try:
+        ensure_desktop()
+        try:
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            win32clipboard.CloseClipboard()
+        except Exception:
+            pass
         win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, 0x0170, 0)
-        time.sleep(0.15)
-        return get_clipboard()
+        for _ in range(5):
+            time.sleep(0.1)
+            text = get_clipboard()
+            if text:
+                return text
+        return ""
     except Exception as e:
         return ""
 
 def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_interval: float = 1.0) -> bool:
     """
-    Wait until ANY of the specified patterns appear on the PuTTY window screen.
+    Wait until ANY of the specified patterns appear on the PuTTY window screen as output.
     Returns True when found, False on timeout.
     """
     start_time = time.time()
@@ -158,8 +179,8 @@ def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_int
         text = capture_screen_text(hwnd)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         for pat in patterns:
-            # Match exact line or substring in non-command lines
-            if any(l == pat or l == f"'{pat}'" or (pat in l and not l.startswith("root@")) for l in lines):
+            # Match exact line or isolated output, ignoring the command input echo line
+            if any((l == pat or l == f"'{pat}'" or l == f'"{pat}"') for l in lines if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")):
                 return True
         time.sleep(poll_interval)
     return False

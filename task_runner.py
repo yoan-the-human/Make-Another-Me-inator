@@ -170,16 +170,18 @@ echo "{push_marker}" """
     pass_sent = False
     while time.time() - start_push < 180:
         screen = putty.capture_screen_text(git_hwnd)
-        if push_marker in screen:
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        has_push_marker = any((l == push_marker or l == f'"{push_marker}"' or l == f"'{push_marker}'") for l in lines if not l.startswith("echo") and not l.startswith("root@"))
+        if has_push_marker:
             print("[GIT PUITY] ✅ Push and commit completed successfully!")
             break
-        if not user_sent and "Username for" in screen:
+        if not user_sent and any("Username for" in l for l in lines[-5:]):
             print("[GIT PUITY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
             time.sleep(1.0)
-        elif not pass_sent and "Password for" in screen:
+        elif not pass_sent and any("Password for" in l for l in lines[-5:]):
             print("[GIT PUITY] Detected Password prompt! Entering password...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
