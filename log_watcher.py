@@ -122,23 +122,34 @@ class LogWatcher:
             time.sleep(0.5)
         return False
 
-    def wait_for_claude_completion(self, claude_hwnd: int = None, idle_seconds: int = 8, max_timeout: int = 2400, progress_callback=None) -> bool:
+    def wait_for_claude_completion(self, claude_hwnd: int = None, idle_seconds: int = 10, max_timeout: int = 2400, progress_callback=None) -> bool:
         """
         Wait until Claude Code finishes thinking and tool execution.
         Monitors both the PuTTY session log and live terminal screen text.
         """
+        print(f"[CLAUDE MONITOR] Prompt submitted. Waiting 6s for Claude to engage engine...")
+        time.sleep(6.0)
+        
         start_time = time.time()
         last_change_time = time.time()
         had_output = False
         recent_buffer = ""
         last_screen = ""
         
-        print(f"[CLAUDE MONITOR] Watching Claude output (will complete after {idle_seconds}s of silence)...")
+        if claude_hwnd:
+            try:
+                import putty_controller as putty
+                last_screen = putty.capture_screen_text(claude_hwnd)
+            except Exception:
+                pass
+        
+        print(f"[CLAUDE MONITOR] Watching Claude output (will complete after {idle_seconds}s of silence and prompt return)...")
         
         while time.time() - start_time < max_timeout:
             chunk = self.get_new_text()
             current_time = time.time()
             screen_changed = False
+            curr_screen = ""
             
             if claude_hwnd:
                 try:
@@ -163,29 +174,30 @@ class LogWatcher:
             else:
                 idle_duration = current_time - last_change_time
                 
+                # Check if Claude is still actively processing
+                is_busy = False
+                if curr_screen:
+                    low = curr_screen.lower()
+                    if "esc to interrupt" in low or "thinking" in low or "running" in low:
+                        is_busy = True
+                
                 # Check for permission prompt
                 if "yes/no" in recent_buffer.lower() or ("allow" in recent_buffer.lower() and "[y/n]" in recent_buffer.lower()):
                     print("\n[WARNING] Claude may be waiting for a permission confirmation! (Check Claude PuTTY window)")
                 
-                # Check completion: quiet for idle_seconds after activity
-                if had_output and idle_duration >= idle_seconds:
-                    # Check for prompt symbol in buffer or on screen
+                # Check completion: quiet for idle_seconds after activity, and NOT busy
+                if had_output and not is_busy and idle_duration >= idle_seconds:
                     screen_has_prompt = False
-                    if claude_hwnd:
-                        try:
-                            import putty_controller as putty
-                            curr_screen = putty.capture_screen_text(claude_hwnd)
-                            lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
-                            # Does last line or near last line contain input prompt ❯?
-                            screen_has_prompt = any(l.startswith("❯") or l == "❯" for l in lines[-5:])
-                        except Exception:
-                            pass
+                    if curr_screen:
+                        lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
+                        # Does last line or near last line contain input prompt ❯?
+                        screen_has_prompt = any(l.startswith("❯") or l == "❯" for l in lines[-5:])
                             
                     indicators = ["❯", "? for", "Cost:", "duration", "╭─", "╰─", "bypass permissions"]
                     has_prompt = screen_has_prompt or any(ind in recent_buffer for ind in indicators)
                     
-                    if has_prompt or idle_duration >= (idle_seconds + 5):
-                        print(f"\n[CLAUDE MONITOR] Claude has completed the task! (Quiet for {int(idle_duration)}s)")
+                    if has_prompt:
+                        print(f"\n[CLAUDE MONITOR] ✅ Claude has completed the task! (Prompt returned, idle for {int(idle_duration)}s)")
                         return True
 
             time.sleep(1.0)

@@ -211,22 +211,42 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     """
     Continuous worker loop:
     - Processes all tasks in pending/
-    - When pending is empty, engages Telegram alert loop every 2 minutes
-    - Automatically resumes when new tasks appear in pending/
+    - If a task is in working/ (e.g. from previous run), recovers it to pending/
+    - ONLY engages Telegram alert when BOTH pending/ and working/ are completely empty
+    - Automatically resumes when new tasks appear
     """
     while True:
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
+        working_files = sorted(list(config.WORKING_DIR.glob("*.txt")))
+        
+        # If there are orphaned tasks in working/, recover them to pending/
+        if working_files and not pending_files:
+            print(f"[QUEUE] Found task in working folder: '{working_files[0].name}'. Recovering to pending queue...")
+            task_file = working_files[0]
+            target_pending = config.PENDING_DIR / task_file.name
+            if target_pending.exists():
+                target_pending.unlink()
+            shutil.move(str(task_file), str(target_pending))
+            pending_files = [target_pending]
         
         if pending_files:
             task_file = pending_files[0]
             try:
-                process_single_task(task_file, git_hwnd, claude_hwnd, watcher)
+                success = process_single_task(task_file, git_hwnd, claude_hwnd, watcher)
+                if not success:
+                    print(f"[ERROR] Task '{task_file.name}' did not complete successfully.")
             except Exception as e:
                 print(f"[ERROR] Exception during task execution: {e}")
-                # Don't spin uncontrollably on error
+                # If file got stuck in working folder, move it back to pending so it doesn't get lost
+                working_target = config.WORKING_DIR / task_file.name
+                if working_target.exists():
+                    target_pending = config.PENDING_DIR / task_file.name
+                    if target_pending.exists():
+                        target_pending.unlink()
+                    shutil.move(str(working_target), str(target_pending))
                 time.sleep(3)
         else:
-            # Pending queue is empty!
+            # BOTH pending and working are completely empty!
             has_new = telegram_alert.wait_for_new_task_or_alert(interval_seconds=120)
             if not has_new:
                 break
