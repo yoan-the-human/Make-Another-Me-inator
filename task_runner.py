@@ -57,6 +57,13 @@ def parse_task_file(file_path: Path):
         "prompt": prompt
     }
 
+def resolve_server_worktree_path(worktree_dir: str) -> str:
+    """Resolve relative worktree path (e.g. '../tasks/task-XYZ') to absolute '/data/tasks/task-XYZ'."""
+    if worktree_dir.startswith("/"):
+        return worktree_dir
+    clean = worktree_dir.replace("../", "").lstrip("/")
+    return f"/data/{clean}"
+
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
     """
     Execute full workflow for a single task:
@@ -85,37 +92,41 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         
     raw_git_cmd = task_info["raw_git_cmd"]
     worktree_dir = task_info["worktree_dir"]
+    abs_worktree_dir = resolve_server_worktree_path(worktree_dir)
     branch_name = task_info["branch_name"]
     commit_msg = task_info["commit_message"].replace('"', '\\"') # escape quotes for bash
     prompt = task_info["prompt"]
     
-    print(f"  -> Worktree Dir: {worktree_dir}")
+    print(f"  -> Worktree Dir: {worktree_dir} (Absolute: {abs_worktree_dir})")
     print(f"  -> Branch Name:   {branch_name}")
     print(f"  -> Commit Msg:    {commit_msg}")
     print(f"  -> Prompt length: {len(prompt)} chars")
 
-    # Step 2: In Git PuTTY, execute worktree command
-    print("\n[GIT PUITY] 1. Creating worktree...")
-    putty.paste_text(git_hwnd, raw_git_cmd, press_enter=True)
-    time.sleep(3.0)
+    # Step 2: In Git PuTTY, execute worktree command and wait until all files are checked out!
+    print("\n[GIT PUITY] 1. Creating worktree and checking out files...")
+    marker = "==WORKTREE_READY_100=="
+    git_full_cmd = f"{raw_git_cmd} && cd {worktree_dir} && echo '{marker}'"
+    putty.paste_text(git_hwnd, git_full_cmd, press_enter=True)
     
-    print(f"[GIT PUITY] 2. Navigating into worktree: cd {worktree_dir}")
-    putty.paste_text(git_hwnd, f"cd {worktree_dir}", press_enter=True)
-    time.sleep(1.5)
+    print(f"[GIT PUITY] Checking out files on server (waiting up to 180s for 100% completion)...")
+    ready = putty.wait_for_git_worktree(git_hwnd, worktree_dir, timeout=180)
+    if not ready:
+        print("[WARNING] Worktree checkout did not confirm via marker. Waiting extra 5s...")
+        time.sleep(5.0)
 
     # Step 3: In Claude PuTTY, switch directory and navigate trust prompt
-    print("\n[CLAUDE PUITY] 3. Clearing previous context (/clear)...")
+    print("\n[CLAUDE PUITY] 2. Clearing previous context (/clear)...")
     putty.paste_text(claude_hwnd, "/clear", press_enter=True)
     time.sleep(2.0)
     
-    print(f"[CLAUDE PUITY] 4. Changing Claude directory: /cd {worktree_dir}")
+    print(f"[CLAUDE PUITY] 3. Changing Claude directory: /cd {abs_worktree_dir}")
     watcher.mark_start()
-    putty.paste_text(claude_hwnd, f"/cd {worktree_dir}", press_enter=True)
+    putty.paste_text(claude_hwnd, f"/cd {abs_worktree_dir}", press_enter=True)
     time.sleep(1.5)
     
     # Check if trust prompt appears
     print("[CLAUDE PUITY] Checking for directory trust prompt...")
-    has_trust_prompt = watcher.wait_for_trust_prompt(timeout=5)
+    has_trust_prompt = watcher.wait_for_trust_prompt(timeout=6, claude_hwnd=claude_hwnd)
     if has_trust_prompt:
         print("[CLAUDE PUITY] Detected directory trust prompt! Selecting 'Yes, move here' (Down Arrow + Enter)...")
         time.sleep(0.5)
@@ -127,13 +138,13 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         print("[CLAUDE PUITY] No trust prompt detected (or directory already trusted).")
 
     # Step 4: In Claude PuTTY, send the prompt
-    print("\n[CLAUDE PUITY] 5. Sending task prompt to Claude...")
+    print("\n[CLAUDE PUITY] 4. Sending task prompt to Claude...")
     watcher.mark_start()
     putty.paste_text(claude_hwnd, prompt, press_enter=True)
     
     # Step 5: Wait for Claude completion
     print("[CLAUDE PUITY] Waiting for Claude to finish working on task...")
-    completed = watcher.wait_for_claude_completion(idle_seconds=7, max_timeout=2400)
+    completed = watcher.wait_for_claude_completion(claude_hwnd=claude_hwnd, idle_seconds=8, max_timeout=2400)
     if not completed:
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
@@ -142,33 +153,47 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     putty.paste_text(claude_hwnd, f"/cd {config.SERVER_REPO_DIR}", press_enter=True)
     time.sleep(1.5)
 
-    # Step 7: In Git PuTTY, commit and push changes
-    print("\n[GIT PUITY] 6. Checking git status and committing changes...")
+    # Step 7: In Git PuTTY, commit and push changes with dynamic credential monitoring
+    print("\n[GIT PUITY] 5. Checking git status and committing changes...")
+    push_marker = "==PUSH_COMPLETE_OK=="
     git_script = f"""if [ -n "$(git status --porcelain)" ]; then
   git add .
   git commit -m "{commit_msg}"
   git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main
-fi"""
+fi
+echo "{push_marker}" """
     putty.paste_text(git_hwnd, git_script, press_enter=True)
     
-    # Handle credentials prompt
-    print("[GIT PUITY] Waiting for credentials prompt (Username/Password)...")
-    time.sleep(3.0)
-    if config.GIT_USERNAME:
-        print(f"[GIT PUITY] Sending Git Username...")
-        putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
-        time.sleep(2.0)
-    if config.GIT_PASSWORD:
-        print(f"[GIT PUITY] Sending Git Password...")
-        putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
-        time.sleep(4.0)
+    print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
+    start_push = time.time()
+    user_sent = False
+    pass_sent = False
+    while time.time() - start_push < 180:
+        screen = putty.capture_screen_text(git_hwnd)
+        if push_marker in screen:
+            print("[GIT PUITY] ✅ Push and commit completed successfully!")
+            break
+        if not user_sent and "Username for" in screen:
+            print("[GIT PUITY] Detected Username prompt! Entering username...")
+            time.sleep(0.5)
+            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
+            user_sent = True
+            time.sleep(1.0)
+        elif not pass_sent and "Password for" in screen:
+            print("[GIT PUITY] Detected Password prompt! Entering password...")
+            time.sleep(0.5)
+            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+            pass_sent = True
+            time.sleep(2.0)
+        time.sleep(1.0)
         
     # Step 8: Return to base server repo and delete worktree
-    print(f"\n[GIT PUITY] 7. Returning to {config.SERVER_REPO_DIR} and removing worktree...")
-    putty.paste_text(git_hwnd, f"cd {config.SERVER_REPO_DIR}", press_enter=True)
-    time.sleep(1.5)
-    putty.paste_text(git_hwnd, f"git worktree remove --force {worktree_dir}", press_enter=True)
-    time.sleep(2.0)
+    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR} and removing worktree...")
+    cleanup_marker = "==CLEANUP_DONE=="
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} && echo '{cleanup_marker}'"
+    putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
+    putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
+    time.sleep(1.0)
 
     # Step 9: Move file to completed folder
     completed_file = config.COMPLETED_DIR / task_name

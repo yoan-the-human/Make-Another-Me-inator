@@ -138,6 +138,64 @@ def activate_window(hwnd: int) -> bool:
         print(f"[WINDOW] Error activating HWND {hwnd}: {e}")
         return False
 
+def capture_screen_text(hwnd: int) -> str:
+    """Capture all visible text from a PuTTY window using native IDM_COPYALL."""
+    try:
+        win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, 0x0170, 0)
+        time.sleep(0.15)
+        return get_clipboard()
+    except Exception as e:
+        return ""
+
+def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_interval: float = 1.0) -> bool:
+    """
+    Wait until ANY of the specified patterns appear on the PuTTY window screen.
+    Returns True when found, False on timeout.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        text = capture_screen_text(hwnd)
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        for pat in patterns:
+            # Match exact line or substring in non-command lines
+            if any(l == pat or l == f"'{pat}'" or (pat in l and not l.startswith("root@")) for l in lines):
+                return True
+        time.sleep(poll_interval)
+    return False
+
+def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 180) -> bool:
+    """
+    Waits for git worktree checkout (e.g. 43,000 files) to reach 100% and return to shell prompt.
+    Does NOT trigger on the pasted command line!
+    """
+    marker = "==WORKTREE_READY_100=="
+    start_time = time.time()
+    last_pct = ""
+    
+    while time.time() - start_time < timeout:
+        screen = capture_screen_text(hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        
+        # Display checkout progress if visible
+        for line in lines:
+            m = re.search(r'Updating files:\s+(\d+%)', line)
+            if m and m.group(1) != last_pct:
+                last_pct = m.group(1)
+                print(f"[GIT PUITY] Unpacking files: {last_pct}...", flush=True)
+                
+        # The marker MUST appear as its own isolated line from echo, NOT the command line
+        has_marker_line = any(l == marker or l == f"'{marker}'" for l in lines)
+        has_head = any("HEAD is now at" in l or ", done." in l for l in lines)
+        
+        if has_marker_line and has_head:
+            print(f"[GIT PUITY] ✅ All files updated! Worktree checkout 100% complete.")
+            return True
+            
+        time.sleep(1.0)
+        
+    print("[WARNING] Timed out waiting for worktree checkout!")
+    return False
+
 def flash_window(hwnd: int):
     """Flash window caption bar to visually draw user attention."""
     try:
