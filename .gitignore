@@ -1,0 +1,9 @@
+# Ignore the virtual environment folder
+venv/
+
+# Ignore the environment variables file
+.env
+
+/tasks/*
+
+/project_description.txt
