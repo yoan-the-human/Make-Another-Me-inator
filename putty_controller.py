@@ -2,6 +2,8 @@ import os
 import sys
 import time
 import json
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -22,11 +24,43 @@ import config
 
 CACHE_FILE = config.BASE_DIR / ".putty_cache.json"
 
+user32 = ctypes.windll.user32
+
+# Win32 Input structures
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ('wVk', wintypes.WORD),
+        ('wScan', wintypes.WORD),
+        ('dwFlags', wintypes.DWORD),
+        ('time', wintypes.DWORD),
+        ('dwExtraInfo', ctypes.c_ulong)
+    ]
+
+class INPUT(ctypes.Structure):
+    class _INPUT(ctypes.Union):
+        _fields_ = [('ki', KEYBDINPUT)]
+    _anonymous_ = ('_input',)
+    _fields_ = [
+        ('type', wintypes.DWORD),
+        ('_input', _INPUT)
+    ]
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
+KEYEVENTF_SCANCODE = 0x0008
+
 VK_SHIFT = 0x10
 VK_INSERT = 0x2D
 VK_RETURN = 0x0D
 VK_DOWN = 0x28
 VK_MENU = 0x12  # Alt key
+
+SCAN_SHIFT = 0x2A
+SCAN_INSERT = 0x52
+SCAN_RETURN = 0x1C
+SCAN_DOWN = 0x50
 
 def set_clipboard(text: str) -> bool:
     """Set text to Windows clipboard with retry mechanism."""
@@ -93,12 +127,12 @@ def activate_window(hwnd: int) -> bool:
         else:
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
-        # Alt key trick to bypass Windows SetForegroundWindow restrictions
-        win32api.keybd_event(VK_MENU, 0, 0, 0)
-        win32api.keybd_event(VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+        # Alt key tap to bypass Windows SetForegroundWindow lock
+        user32.keybd_event(VK_MENU, 0x38, 0, 0)
+        user32.keybd_event(VK_MENU, 0x38, KEYEVENTF_KEYUP, 0)
         
         win32gui.SetForegroundWindow(hwnd)
-        time.sleep(0.2)
+        time.sleep(0.25)
         return True
     except Exception as e:
         print(f"[WINDOW] Error activating HWND {hwnd}: {e}")
@@ -112,39 +146,39 @@ def flash_window(hwnd: int):
         pass
 
 def send_enter(hwnd: int):
-    """Focus window and send Enter key."""
-    activate_window(hwnd)
-    time.sleep(0.1)
-    win32api.keybd_event(VK_RETURN, 0, 0, 0)
-    time.sleep(0.05)
-    win32api.keybd_event(VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+    """Send Enter key directly to PuTTY window procedure via WM_CHAR 13 (\r)."""
+    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0)
     time.sleep(0.1)
 
 def send_down_arrow(hwnd: int):
-    """Focus window and send Down Arrow key."""
-    activate_window(hwnd)
-    time.sleep(0.1)
-    win32api.keybd_event(VK_DOWN, 0, 0, 0)
-    time.sleep(0.05)
-    win32api.keybd_event(VK_DOWN, 0, win32con.KEYEVENTF_KEYUP, 0)
+    """Send Down Arrow key to PuTTY window procedure."""
+    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_DOWN, 0x01500001)
+    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_DOWN, 0xC1500001)
+    # Terminal escape sequence for down arrow (\x1b[B)
+    for code in [27, 91, 66]:
+        win32gui.PostMessage(hwnd, win32con.WM_CHAR, code, 0)
     time.sleep(0.1)
 
-def paste_text(hwnd: int, text: str, press_enter: bool = True):
+def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool = True):
     """
-    Copy text to clipboard, focus PuTTY window, and send Shift + Insert (PuTTY paste).
-    Optionally presses Enter after pasting.
+    Set clipboard, right-click paste into PuTTY, wait for terminal to register, and send Enter.
     """
-    set_clipboard(text)
-    activate_window(hwnd)
-    time.sleep(0.2)
+    clean_text = text.rstrip("\r\n")
+    set_clipboard(clean_text)
+    time.sleep(0.1)
     
-    # Send Shift + Insert
-    win32api.keybd_event(VK_SHIFT, 0, 0, 0)
-    win32api.keybd_event(VK_INSERT, 0, 0, 0)
+    rect = win32gui.GetClientRect(hwnd)
+    cx = max(10, (rect[2] - rect[0]) // 2)
+    cy = max(10, (rect[3] - rect[1]) // 2)
+    lp = (cy << 16) | (cx & 0xFFFF)
+    
+    # Native PuTTY right-click paste
+    win32gui.SendMessage(hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, lp)
     time.sleep(0.05)
-    win32api.keybd_event(VK_INSERT, 0, win32con.KEYEVENTF_KEYUP, 0)
-    win32api.keybd_event(VK_SHIFT, 0, win32con.KEYEVENTF_KEYUP, 0)
-    time.sleep(0.2)
+    win32gui.SendMessage(hwnd, win32con.WM_RBUTTONUP, 0, lp)
+    
+    # Wait for terminal to process clipboard text
+    time.sleep(0.35)
     
     if press_enter:
         send_enter(hwnd)
@@ -206,7 +240,7 @@ def select_putty_windows(force_prompt: bool = False):
         print(f"\n--- Window [{idx}/{len(windows)}] ---")
         print(f"HWND: {hwnd} | PID: {pid} | Current Title: '{title}'")
         
-        # Pre-suggestion based on Claude title ("✳ empty" or contains "claude")
+        # Pre-suggestion based on Claude title ("✳ Claude Code" or "✳ empty")
         suggestion = "3"
         if "✳" in title or "claude" in title.lower():
             suggestion = "2"
@@ -246,5 +280,5 @@ def select_putty_windows(force_prompt: bool = False):
     return git_hwnd, claude_hwnd
 
 if __name__ == "__main__":
-    git_h, claude_h = select_putty_windows(force_prompt=True)
+    git_h, claude_h = select_putty_windows(force_prompt=False)
     print(f"\nDone! Git HWND: {git_h}, Claude HWND: {claude_h}")
