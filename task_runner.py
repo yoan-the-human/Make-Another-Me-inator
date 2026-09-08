@@ -64,6 +64,155 @@ def resolve_server_worktree_path(worktree_dir: str) -> str:
     clean = worktree_dir.replace("../", "").lstrip("/")
     return f"/data/{clean}"
 
+def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, worktree_dir: str) -> bool:
+    """
+    Execute git add, commit, and push with Merge Request creation.
+    - Dynamically monitors for credentials prompts (Username/Password).
+    - If authentication fails or push fails: halts pipeline, alerts via Telegram,
+      and waits until user provides credentials/pushes and Git confirmation is detected!
+    """
+    push_ok_marker = "==PUSH_COMPLETE_OK=="
+    push_fail_marker = "==PUSH_FAILED_AUTH=="
+
+    git_script = f"""cd {worktree_dir}
+if [ -n "$(git status --porcelain)" ]; then
+  git add .
+  git commit -m "{commit_msg}"
+  git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main
+  PUSH_RC=$?
+else
+  PUSH_RC=0
+fi
+if [ $PUSH_RC -eq 0 ]; then
+  echo "{push_ok_marker}"
+else
+  echo "{push_fail_marker}"
+fi """
+
+    print(f"\n[GIT PUITY] 5. Checking git status, committing, and pushing branch '{branch_name}'...")
+    putty.paste_text(git_hwnd, git_script, press_enter=True)
+
+    print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
+    start_push = time.time()
+    user_sent = False
+    pass_sent = False
+    auth_failed = False
+
+    while time.time() - start_push < 180:
+        screen = putty.capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+
+        # 1. Check success marker
+        has_push_ok = any(
+            (l == push_ok_marker or l == f'"{push_ok_marker}"' or l == f"'{push_ok_marker}'")
+            for l in lines
+            if not l.startswith("echo") and not l.startswith("root@")
+        )
+        if has_push_ok:
+            print("[GIT PUITY] ✅ Push and commit completed successfully!")
+            return True
+
+        # 2. Check for failure marker or authentication errors
+        has_fail_marker = any(
+            (l == push_fail_marker or l == f'"{push_fail_marker}"' or l == f"'{push_fail_marker}'")
+            for l in lines
+            if not l.startswith("echo") and not l.startswith("root@")
+        )
+        recent_text = "\n".join(lines[-12:]).lower()
+        has_auth_err = any(err in recent_text for err in [
+            "authentication failed",
+            "access denied",
+            "invalid username or password",
+            "fatal: could not read username",
+            "fatal: could not read password",
+            "fatal: authentication"
+        ])
+
+        if has_fail_marker or (has_auth_err and (user_sent or pass_sent)):
+            print("\n[GIT PUITY] 🚨 Authentication or git push failure detected!")
+            auth_failed = True
+            break
+
+        # 3. Handle Username prompt
+        if not user_sent and any("Username for" in l for l in lines[-5:]):
+            print("[GIT PUITY] Detected Username prompt! Entering username...")
+            time.sleep(0.5)
+            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
+            user_sent = True
+            time.sleep(1.0)
+        # 4. Handle Password prompt
+        elif not pass_sent and any("Password for" in l for l in lines[-5:]):
+            print("[GIT PUITY] Detected Password prompt! Entering password...")
+            time.sleep(0.5)
+            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+            pass_sent = True
+            time.sleep(2.0)
+
+        time.sleep(1.0)
+
+    # If push timed out without confirmation, treat as failure
+    if not auth_failed:
+        print("[GIT PUITY] ⚠️ Push did not confirm within 180s timeout! Halting for verification.")
+        auth_failed = True
+
+    # --- HALT AND TELEGRAM ALERT ---
+    print("\n" + "=" * 65)
+    print("🚨 [PIPELINE HALTED] GIT PUSH FAILED OR REQUIRES MANUAL INTERACTION!")
+    print(f"Branch:   {branch_name}")
+    print(f"Worktree: {worktree_dir}")
+    print("Please open Git PuTTY, enter credentials or execute push manually.")
+    print("Script is waiting for Git confirmation message...")
+    print("=" * 65 + "\n")
+
+    telegram_alert.send_git_auth_failed_alert(branch_name, worktree_dir)
+
+    # Confirmation patterns indicating push succeeded
+    confirmation_patterns = [
+        f"-> {branch_name}",
+        f"-> origin/{branch_name}",
+        f"[new branch]      {branch_name}",
+        push_ok_marker,
+        "Everything up-to-date",
+        "Everything up to date",
+        "merge_requests",
+        "View merge request"
+    ]
+
+    last_reminder_time = time.time()
+
+    while True:
+        screen = putty.capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        bottom_text = "\n".join(lines[-20:])
+
+        confirmed = False
+        for pat in confirmation_patterns:
+            if pat.lower() in bottom_text.lower():
+                if pat == push_ok_marker and not any(
+                    (l == push_ok_marker or l == f'"{push_ok_marker}"' or l == f"'{push_ok_marker}'")
+                    for l in lines
+                    if not l.startswith("echo") and not l.startswith("root@")
+                ):
+                    continue
+                confirmed = True
+                break
+
+        if confirmed:
+            print(f"\n[GIT PUITY] ✅ Git confirmation detected! Branch '{branch_name}' push confirmed!")
+            telegram_alert.send_git_push_confirmed_notification(branch_name)
+            time.sleep(1.0)
+            return True
+
+        # Periodic reminder every 120s
+        if time.time() - last_reminder_time >= 120:
+            print(f"[GIT PUITY] ⏳ Still waiting for git push confirmation for '{branch_name}'...")
+            telegram_alert.send_telegram_message(
+                f"⏳ *Reminder:* Pipeline is still halted, waiting for git push confirmation for `{branch_name}` in Git PuTTY!"
+            )
+            last_reminder_time = time.time()
+
+        time.sleep(2.0)
+
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
     """
     Execute full workflow for a single task:
@@ -153,41 +302,8 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     putty.paste_text(claude_hwnd, f"/cd {config.SERVER_REPO_DIR}", press_enter=True)
     time.sleep(1.5)
 
-    # Step 7: In Git PuTTY, commit and push changes with dynamic credential monitoring
-    print("\n[GIT PUITY] 5. Checking git status and committing changes...")
-    push_marker = "==PUSH_COMPLETE_OK=="
-    git_script = f"""if [ -n "$(git status --porcelain)" ]; then
-  git add .
-  git commit -m "{commit_msg}"
-  git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main
-fi
-echo "{push_marker}" """
-    putty.paste_text(git_hwnd, git_script, press_enter=True)
-    
-    print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
-    start_push = time.time()
-    user_sent = False
-    pass_sent = False
-    while time.time() - start_push < 180:
-        screen = putty.capture_screen_text(git_hwnd)
-        lines = [l.strip() for l in screen.splitlines() if l.strip()]
-        has_push_marker = any((l == push_marker or l == f'"{push_marker}"' or l == f"'{push_marker}'") for l in lines if not l.startswith("echo") and not l.startswith("root@"))
-        if has_push_marker:
-            print("[GIT PUITY] ✅ Push and commit completed successfully!")
-            break
-        if not user_sent and any("Username for" in l for l in lines[-5:]):
-            print("[GIT PUITY] Detected Username prompt! Entering username...")
-            time.sleep(0.5)
-            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
-            user_sent = True
-            time.sleep(1.0)
-        elif not pass_sent and any("Password for" in l for l in lines[-5:]):
-            print("[GIT PUITY] Detected Password prompt! Entering password...")
-            time.sleep(0.5)
-            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
-            pass_sent = True
-            time.sleep(2.0)
-        time.sleep(1.0)
+    # Step 7: In Git PuTTY, commit and push changes with auth failure detection & halt
+    handle_git_push(git_hwnd, branch_name, commit_msg, worktree_dir)
         
     # Step 8: Return to base server repo, remove worktree and delete local branch
     print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir}) and branch ({branch_name})...")

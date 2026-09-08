@@ -77,6 +77,25 @@ def send_answered_notification() -> bool:
     msg = "🚀 *Orders received!* Detected your answer to Claude in PuTTY. Task execution resumed! ☭"
     return send_telegram_message(msg)
 
+def send_git_auth_failed_alert(branch_name: str, worktree_dir: str) -> bool:
+    """
+    Alert user via Telegram that git push authentication failed and pipeline is halted.
+    """
+    msg = (
+        f"🚨 *Vnimaniye, Comrade Yoan! Git Push Failed!*\n\n"
+        f"Authentication failed while pushing branch `{branch_name}` in worktree `{worktree_dir}`!\n\n"
+        f"🛑 *Pipeline is HALTED.* Please switch to Git PuTTY window, provide correct credentials or push manually.\n"
+        f"Machine is standing guard and waiting to detect Git's confirmation message, tovarisch! 🪆🐻"
+    )
+    return send_telegram_message(msg)
+
+def send_git_push_confirmed_notification(branch_name: str) -> bool:
+    """
+    Notify user that git push confirmation was detected and pipeline resumed.
+    """
+    msg = f"✅ *Spasibo, Comrade Yoan!* Git push confirmed for `{branch_name}`! Resuming pipeline! 🚀☭"
+    return send_telegram_message(msg)
+
 def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
     """
     Called when BOTH pending and working folders are completely empty.

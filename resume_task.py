@@ -15,7 +15,7 @@ if sys.platform == "win32":
 import config
 import putty_controller as putty
 from log_watcher import LogWatcher
-from task_runner import parse_task_file, resolve_server_worktree_path, run_task_loop
+from task_runner import parse_task_file, resolve_server_worktree_path, run_task_loop, handle_git_push
 import telegram_alert
 
 def resume_active_task():
@@ -87,47 +87,8 @@ def resume_active_task():
     putty.paste_text(claude_hwnd, f"/cd {config.SERVER_REPO_DIR}", press_enter=True)
     time.sleep(1.5)
     
-    # 6. In Git PuTTY: commit and push
-    print(f"\n[GIT PUITY] Checking git status and committing changes in {worktree_dir}...")
-    push_marker = "==PUSH_COMPLETE_OK=="
-    git_script = f"""cd {worktree_dir}
-if [ -n "$(git status --porcelain)" ]; then
-  git add .
-  git commit -m "{commit_msg}"
-  git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main
-fi
-echo "{push_marker}" """
-    putty.paste_text(git_hwnd, git_script, press_enter=True)
-    
-    print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
-    start_push = time.time()
-    user_sent = False
-    pass_sent = False
-    push_ok = False
-    while time.time() - start_push < 180:
-        screen = putty.capture_screen_text(git_hwnd)
-        lines = [l.strip() for l in screen.splitlines() if l.strip()]
-        has_push_marker = any((l == push_marker or l == f'"{push_marker}"' or l == f"'{push_marker}'") for l in lines if not l.startswith("echo") and not l.startswith("root@"))
-        if has_push_marker:
-            print("[GIT PUITY] ✅ Push and commit completed successfully!")
-            push_ok = True
-            break
-        if not user_sent and any("Username for" in l for l in lines[-5:]):
-            print("[GIT PUITY] Detected Username prompt! Entering username...")
-            time.sleep(0.5)
-            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
-            user_sent = True
-            time.sleep(1.0)
-        elif not pass_sent and any("Password for" in l for l in lines[-5:]):
-            print("[GIT PUITY] Detected Password prompt! Entering password...")
-            time.sleep(0.5)
-            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
-            pass_sent = True
-            time.sleep(2.0)
-        time.sleep(1.0)
-        
-    if not push_ok:
-        print("[WARNING] Push marker did not confirm within timeout. Please inspect Git PuTTY window.")
+    # 6. In Git PuTTY: commit and push changes with auth failure detection & halt
+    handle_git_push(git_hwnd, branch_name, commit_msg, worktree_dir)
 
     # 7. In Git PuTTY: cleanup worktree and delete local branch
     print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir}) and branch ({branch_name})...")
