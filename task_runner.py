@@ -189,10 +189,10 @@ echo "{push_marker}" """
             time.sleep(2.0)
         time.sleep(1.0)
         
-    # Step 8: Return to base server repo and remove worktree (preserving branch for testing)
-    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree (preserving branch '{branch_name}')...")
+    # Step 8: Return to base server repo, remove worktree and delete local branch
+    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir}) and branch ({branch_name})...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; git branch -D {branch_name} 2>/dev/null ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
