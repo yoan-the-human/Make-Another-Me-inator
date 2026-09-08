@@ -251,23 +251,18 @@ class LogWatcher:
                 in_question_mode = True
 
         while time.time() - start_time < max_timeout:
-            # Sleep poll_interval seconds in 1s increments for responsive interruption
-            sleep_needed = poll_interval
-            while sleep_needed > 0 and (time.time() - start_time < max_timeout):
-                time.sleep(1.0)
-                sleep_needed -= 1
-
             if not claude_hwnd:
                 time.sleep(1.0)
                 continue
 
             curr_screen = putty.capture_screen_text(claude_hwnd)
             if not curr_screen:
+                time.sleep(1.0)
                 continue
 
             lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
-            bottom_lines = lines[-15:]
-            is_busy = any("esc to interrupt" in l.lower() for l in lines)
+            bottom_lines = lines[-20:]
+            is_busy = any("esc to interrupt" in l.lower() for l in bottom_lines)
             is_asking, q_details = detect_claude_question_or_choice(curr_screen)
 
             # 1. Did the user just answer a question Claude was waiting on?
@@ -284,22 +279,25 @@ class LogWatcher:
                 in_question_mode = True
                 # Alert every 2 minutes
                 telegram_alert.send_question_alert(q_details)
-                continue
-
-            # 3. Is Claude actively working?
-            if is_busy:
+            elif is_busy:
+                # 3. Is Claude actively working?
                 elapsed_mins = int((time.time() - start_time) / 60)
                 print(f"[CLAUDE MONITOR] ⏳ Claude is actively working... ({elapsed_mins}m elapsed)")
-                continue
+            else:
+                # 4. Is Claude genuinely done?
+                # Claude is NOT busy and NOT asking a question.
+                has_done = any("· done" in l.lower() for l in bottom_lines)
+                has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
 
-            # 4. Is Claude genuinely done?
-            # Claude is NOT busy and NOT asking a question.
-            has_done = any("· done" in l.lower() for l in bottom_lines)
-            has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
+                if has_done or has_prompt:
+                    print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
+                    return True
 
-            if has_done or has_prompt:
-                print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
-                return True
+            # Sleep poll_interval seconds in 1s increments for responsive interruption
+            sleep_needed = poll_interval
+            while sleep_needed > 0 and (time.time() - start_time < max_timeout):
+                time.sleep(1.0)
+                sleep_needed -= 1
 
         print(f"\n[CLAUDE MONITOR] ⚠️ Timeout reached while waiting for Claude to finish!")
         return False

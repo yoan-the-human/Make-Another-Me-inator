@@ -97,10 +97,10 @@ def resume_active_task():
     # 6. In Git PuTTY: commit and push changes with auth failure detection & halt
     handle_git_push(git_hwnd, branch_name, commit_msg, worktree_dir)
 
-    # 7. In Git PuTTY: cleanup worktree and delete local branch
-    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir}) and branch ({branch_name})...")
+    # 7. In Git PuTTY: cleanup worktree
+    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir})...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; git branch -D {branch_name} 2>/dev/null ; echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
