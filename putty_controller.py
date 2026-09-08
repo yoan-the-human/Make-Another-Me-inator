@@ -187,41 +187,46 @@ def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_int
     """
     Wait until ANY of the specified patterns appear on the PuTTY window screen as output.
     Returns True when found, False on timeout.
+    Only checks recent terminal lines (bottom 30 lines) to avoid matching historical scrollback!
     """
     start_time = time.time()
     while time.time() - start_time < timeout:
         text = capture_screen_text(hwnd)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
+        recent_lines = lines[-30:]
         for pat in patterns:
             # Match exact line or isolated output, ignoring the command input echo line
-            if any((l == pat or l == f"'{pat}'" or l == f'"{pat}"') for l in lines if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")):
+            if any((l == pat or l == f"'{pat}'" or l == f'"{pat}"') for l in recent_lines if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")):
                 return True
         time.sleep(poll_interval)
     return False
 
-def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120) -> bool:
+def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120, marker: str = None) -> bool:
     """
     Waits for git worktree checkout (e.g. 43,000 files) to reach 100% and return to shell prompt.
     Does NOT trigger on the pasted command line!
+    Only checks recent terminal lines to avoid false triggers from prior tasks.
     """
-    marker = "==WORKTREE_READY_100=="
+    if not marker:
+        marker = "==WORKTREE_READY_100=="
     start_time = time.time()
     last_pct = ""
     
     while time.time() - start_time < timeout:
         screen = capture_screen_text(hwnd)
         lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-30:]
         
         # Display checkout progress if visible
-        for line in lines:
+        for line in recent_lines:
             m = re.search(r'Updating files:\s+(\d+%)', line)
             if m and m.group(1) != last_pct:
                 last_pct = m.group(1)
                 print(f"[GIT PUITY] Unpacking files: {last_pct}...", flush=True)
                 
         # The marker MUST appear as its own isolated line from echo, NOT the command line
-        has_marker_line = any(l == marker or l == f"'{marker}'" for l in lines)
-        has_head = any("HEAD is now at" in l or ", done." in l for l in lines)
+        has_marker_line = any((l == marker or l == f"'{marker}'") for l in recent_lines if not l.startswith("echo ") and " && echo " not in l)
+        has_head = any("HEAD is now at" in l or ", done." in l for l in recent_lines)
         
         if has_marker_line and has_head:
             print(f"[GIT PUITY] ✅ All files updated! Worktree checkout 100% complete.")
