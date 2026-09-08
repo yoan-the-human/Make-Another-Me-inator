@@ -108,8 +108,8 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     git_full_cmd = f"{raw_git_cmd} && cd {worktree_dir} && echo '{marker}'"
     putty.paste_text(git_hwnd, git_full_cmd, press_enter=True)
     
-    print(f"[GIT PUITY] Checking out files on server (waiting up to 180s for 100% completion)...")
-    ready = putty.wait_for_git_worktree(git_hwnd, worktree_dir, timeout=180)
+    print(f"[GIT PUITY] Checking out files on server (waiting up to 120s for 100% completion)...")
+    ready = putty.wait_for_git_worktree(git_hwnd, worktree_dir, timeout=120)
     if not ready:
         print("[WARNING] Worktree checkout did not confirm via marker. Waiting extra 5s...")
         time.sleep(5.0)

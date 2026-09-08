@@ -53,6 +53,30 @@ def send_quota_alert(usage_pct: float, reset_time: str = "") -> bool:
     msg += "\n\n🛑 Automated pipeline is halting all tasks to protect your quota from hitting the wall.\nRest by the samovar, drink vodka, and wait for reset, tovarisch! 🪆🐻"
     return send_telegram_message(msg)
 
+def send_question_alert(question_text: str) -> bool:
+    """
+    Alert user via Telegram that Claude is asking a question or waiting for user choice.
+    """
+    preview = question_text.strip() if question_text else "Claude is asking you to pick an option or give permission."
+    if len(preview) > 800:
+        preview = preview[:800] + "..."
+
+    msg = (
+        f"❓ *Vnimaniye, Comrade Yoan! Claude has a question!*\n\n"
+        f"Claude is waiting for your choice in PuTTY:\n"
+        f"```\n{preview}\n```\n"
+        f"⚠️ Please switch to Claude PuTTY window and make your selection!\n"
+        f"Machine will check every 2 minutes if you answered, tovarisch! 🪆🐻"
+    )
+    return send_telegram_message(msg)
+
+def send_answered_notification() -> bool:
+    """
+    Notify user that answer was detected in PuTTY and Claude resumed work.
+    """
+    msg = "🚀 *Orders received!* Detected your answer to Claude in PuTTY. Task execution resumed! ☭"
+    return send_telegram_message(msg)
+
 def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
     """
     Called when BOTH pending and working folders are completely empty.

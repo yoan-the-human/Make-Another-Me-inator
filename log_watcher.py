@@ -21,6 +21,104 @@ def clean_ansi(text: str) -> str:
     # Strip non-printable chars except tab and newline
     return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', no_ansi)
 
+def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
+    """
+    Detect if Claude Code is paused asking the user a question, presenting choices,
+    or requesting tool execution permissions.
+    Returns (is_asking, question_summary).
+    """
+    if not screen_text:
+        return False, ""
+    
+    lines = [l.strip() for l in screen_text.splitlines() if l.strip()]
+    if not lines:
+        return False, ""
+        
+    bottom_lines = lines[-25:]
+    bottom_text = "\n".join(bottom_lines)
+    
+    # Check for interactive menu / selection controls (excluding settings/usage dialogs)
+    has_choice_nav = any(m in bottom_text.lower() for m in [
+        "enter to select", "space to toggle", "space to select", 
+        "arrows to move", "use arrow keys", "type something", 
+        "type something else"
+    ])
+    
+    # Check for numbered or bulleted options (e.g. 1) ... 2) ... or ❯ 1... or [1]... or - ...)
+    numbered_options = []
+    for line in bottom_lines:
+        m = re.match(r'^(?:❯\s*)?(?:\(\d+\)|\[\d+\]|\d+[\.\)]|[a-zA-Z][\.\)]|\(?\s*[xX\s]\s*\)|[-*•]\s+)\s*(.+)', line)
+        if m:
+            numbered_options.append(line)
+        elif line.lower().startswith("other") or "type something" in line.lower():
+            numbered_options.append(line)
+
+    has_multiple_options = len(numbered_options) >= 2
+
+    # Check for question indicators
+    question_keywords = [
+        "would you like", "which option", "choose an option", 
+        "select one", "pick 1 of", "pick one of", "please choose",
+        "which approach", "how would you like", "do you prefer", "should i"
+    ]
+    question_lines = []
+    for line in bottom_lines:
+        lower = line.lower()
+        if line.startswith("?") or line.endswith("?") or any(kw in lower for kw in question_keywords):
+            if not line.startswith("root@") and not line.startswith("cd ") and not line.startswith("echo "):
+                question_lines.append(line)
+
+    has_question_prompt = len(question_lines) > 0
+
+    # Check for permission prompts
+    has_permission = any(q in bottom_text.lower() for q in [
+        "allow?", "[y/n]", "(y/n)", "yes/no", "[y/n/always]", "allow tool", "allow command", "do you want to proceed"
+    ])
+
+    # Check the last meaningful line before prompt (if prompt ❯ is visible)
+    meaningful_lines_before_prompt = []
+    for l in bottom_lines:
+        if l.startswith("❯") or l == "❯":
+            break
+        if not all(c in "─-=_ " for c in l) and not l.startswith("root@"):
+            meaningful_lines_before_prompt.append(l)
+
+    last_meaningful = meaningful_lines_before_prompt[-1] if meaningful_lines_before_prompt else ""
+    last_is_question = (last_meaningful.endswith("?") or any(kw in last_meaningful.lower() for kw in question_keywords))
+
+    is_asking = False
+    details = []
+
+    if has_permission:
+        is_asking = True
+        details.append("Permission requested ([y/n])")
+        for line in bottom_lines[-6:]:
+            if any(q in line.lower() for q in ["allow", "y/n", "yes/no", "proceed"]):
+                details.append(line)
+                break
+    elif has_choice_nav or (has_multiple_options and (has_question_prompt or any("❯" in opt for opt in numbered_options))):
+        is_asking = True
+        if question_lines:
+            details.append(question_lines[-1])
+        details.extend(numbered_options[:5])
+    elif has_question_prompt and has_multiple_options:
+        is_asking = True
+        details.append(question_lines[-1])
+        details.extend(numbered_options[:5])
+    elif has_question_prompt and any(line.startswith("?") for line in question_lines):
+        is_asking = True
+        details.append(question_lines[-1])
+        if numbered_options:
+            details.extend(numbered_options[:5])
+    elif last_is_question and (has_multiple_options or len(meaningful_lines_before_prompt) >= 1):
+        is_asking = True
+        details.append(last_meaningful)
+        if numbered_options:
+            details.extend(numbered_options[:5])
+
+    summary = "\n".join(details) if details else ""
+    return is_asking, summary
+
 class LogWatcher:
     def __init__(self, log_path: Path = None):
         self.log_path = Path(log_path or config.PUTTY_LOG_PATH)
@@ -122,98 +220,88 @@ class LogWatcher:
             time.sleep(0.5)
         return False
 
-    def wait_for_claude_completion(self, claude_hwnd: int = None, idle_seconds: int = 10, max_timeout: int = 2400, progress_callback=None) -> bool:
+    def wait_for_claude_completion(self, claude_hwnd: int = None, idle_seconds: int = 10, max_timeout: int = 3600, poll_interval: int = None, progress_callback=None) -> bool:
         """
         Wait until Claude Code finishes thinking and tool execution.
-        Monitors both the PuTTY session log and live terminal screen text.
+        - Preserves user clipboard and checks screen every `poll_interval` seconds (default 120s / 2 minutes).
+        - Detects if Claude asks a question / choices: alerts via Telegram every 2 minutes until answered!
+        - Only completes when Claude has genuinely finished the task.
         """
-        print(f"[CLAUDE MONITOR] Prompt submitted. Waiting 6s for Claude to engage engine...")
-        time.sleep(6.0)
-        
-        start_time = time.time()
-        last_change_time = time.time()
-        had_output = False
-        recent_buffer = ""
-        last_screen = ""
-        
-        if claude_hwnd:
-            try:
-                import putty_controller as putty
-                last_screen = putty.capture_screen_text(claude_hwnd)
-            except Exception:
-                pass
-        
-        print(f"[CLAUDE MONITOR] Watching Claude output (will complete when Claude returns prompt)...")
-        stable_done_count = 0
-        
-        while time.time() - start_time < max_timeout:
-            chunk = self.get_new_text()
-            current_time = time.time()
-            screen_changed = False
-            curr_screen = ""
-            
-            if claude_hwnd:
-                try:
-                    import putty_controller as putty
-                    curr_screen = putty.capture_screen_text(claude_hwnd)
-                    if curr_screen and curr_screen != last_screen:
-                        screen_changed = True
-                        last_screen = curr_screen
-                except Exception:
-                    pass
-            
-            if chunk or screen_changed:
-                had_output = True
-                last_change_time = current_time
-                stable_done_count = 0
-                if chunk:
-                    recent_buffer = (recent_buffer + chunk)[-4000:]
-                if progress_callback and chunk:
-                    progress_callback(chunk)
-                else:
-                    sys.stdout.write(".")
-                    sys.stdout.flush()
-            else:
-                idle_duration = current_time - last_change_time
-                
-                # Check if Claude is still actively processing
-                # Claude ONLY displays 'esc to interrupt' in bottom status lines while busy
-                is_busy = False
-                has_done = False
-                has_prompt = False
-                
-                if curr_screen:
-                    lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
-                    bottom_lines = lines[-12:]
-                    is_busy = any("esc to interrupt" in l.lower() for l in lines)
-                    has_done = any("· done" in l for l in bottom_lines)
-                    has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
-                
-                # Check for permission prompt
-                if curr_screen:
-                    bottom_text = " ".join(lines[-10:]).lower() if 'lines' in locals() else ""
-                    if any(q in bottom_text for q in ["allow?", "[y/n]", "(y/n)", "yes/no"]):
-                        print("\n[WARNING] Claude may be waiting for a permission confirmation! (Check Claude PuTTY window)")
-                elif "yes/no" in recent_buffer.lower() or ("allow" in recent_buffer.lower() and "[y/n]" in recent_buffer.lower()):
-                    print("\n[WARNING] Claude may be waiting for a permission confirmation! (Check Claude PuTTY window)")
-                
-                # Check completion:
-                # 1) If we see "· done" and prompt "❯" with NO "esc to interrupt", Claude is done!
-                # 2) Or if prompt "❯" is present and idle for >= idle_seconds with NO "esc to interrupt"
-                if not is_busy and (has_done or has_prompt):
-                    stable_done_count += 1
-                    if stable_done_count >= 3:
-                        print(f"\n[CLAUDE MONITOR] ✅ Claude has completed the task! (Prompt returned, idle for {int(idle_duration)}s)")
-                        return True
-                elif had_output and not is_busy and idle_duration >= idle_seconds:
-                    indicators = ["❯", "? for", "Cost:", "duration", "╭─", "╰─", "bypass permissions"]
-                    if any(ind in recent_buffer for ind in indicators) or has_prompt:
-                        print(f"\n[CLAUDE MONITOR] ✅ Claude has completed the task! (Prompt returned, idle for {int(idle_duration)}s)")
-                        return True
+        import putty_controller as putty
+        import telegram_alert
 
-            time.sleep(1.0)
-            
-        print("\n[CLAUDE MONITOR] Timeout reached while waiting for Claude to finish!")
+        if poll_interval is None:
+            poll_interval = getattr(config, "CLAUDE_POLL_INTERVAL", 120)
+
+        print(f"[CLAUDE MONITOR] Task submitted. Waiting 10s for Claude to engage...")
+        time.sleep(10.0)
+
+        start_time = time.time()
+        in_question_mode = False
+
+        print(f"[CLAUDE MONITOR] Watching Claude output (checking every {poll_interval}s; your clipboard is safe)...")
+
+        # Initial check at 10s: check if Claude immediately asked a question or permission
+        if claude_hwnd:
+            curr_screen = putty.capture_screen_text(claude_hwnd)
+            is_asking, q_details = detect_claude_question_or_choice(curr_screen)
+            if is_asking:
+                print(f"\n[CLAUDE MONITOR] ❓ Claude asked a question/choice immediately! Alerting Telegram...")
+                telegram_alert.send_question_alert(q_details)
+                in_question_mode = True
+
+        while time.time() - start_time < max_timeout:
+            # Sleep poll_interval seconds in 1s increments for responsive interruption
+            sleep_needed = poll_interval
+            while sleep_needed > 0 and (time.time() - start_time < max_timeout):
+                time.sleep(1.0)
+                sleep_needed -= 1
+
+            if not claude_hwnd:
+                time.sleep(1.0)
+                continue
+
+            curr_screen = putty.capture_screen_text(claude_hwnd)
+            if not curr_screen:
+                continue
+
+            lines = [l.strip() for l in curr_screen.splitlines() if l.strip()]
+            bottom_lines = lines[-15:]
+            is_busy = any("esc to interrupt" in l.lower() for l in lines)
+            is_asking, q_details = detect_claude_question_or_choice(curr_screen)
+
+            # 1. Did the user just answer a question Claude was waiting on?
+            if in_question_mode:
+                if not is_asking or is_busy:
+                    print(f"\n[CLAUDE MONITOR] 🚀 Answer detected! Claude resumed task processing...")
+                    telegram_alert.send_answered_notification()
+                    in_question_mode = False
+
+            # 2. Is Claude asking a question or waiting for user choice/permission?
+            if is_asking:
+                elapsed_mins = int((time.time() - start_time) / 60)
+                print(f"\n[CLAUDE MONITOR] ❓ Claude is waiting for user decision in PuTTY ({elapsed_mins}m elapsed)!")
+                in_question_mode = True
+                # Alert every 2 minutes
+                telegram_alert.send_question_alert(q_details)
+                continue
+
+            # 3. Is Claude actively working?
+            if is_busy:
+                elapsed_mins = int((time.time() - start_time) / 60)
+                print(f"[CLAUDE MONITOR] ⏳ Claude is actively working... ({elapsed_mins}m elapsed)")
+                continue
+
+            # 4. Is Claude genuinely done?
+            # Claude is NOT busy and NOT asking a question.
+            has_done = any("· done" in l.lower() for l in bottom_lines)
+            has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
+
+            if has_done or has_prompt:
+                print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
+                return True
+
+        print(f"\n[CLAUDE MONITOR] ⚠️ Timeout reached while waiting for Claude to finish!")
         return False
 
 if __name__ == "__main__":

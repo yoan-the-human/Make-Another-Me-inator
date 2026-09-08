@@ -52,9 +52,11 @@ if ENV_FILE.exists():
         PUTTY_LOG_PATH = Path(env_dict["PUTTY_LOG_PATH"])
 
     USAGE_THRESHOLD = float(env_dict.get("USAGE_THRESHOLD", 80.0))
+    CLAUDE_POLL_INTERVAL = int(env_dict.get("CLAUDE_POLL_INTERVAL", 120))
 else:
     print(f"[WARNING] .env file not found at {ENV_FILE}!")
     USAGE_THRESHOLD = 80.0
+    CLAUDE_POLL_INTERVAL = 120
 
 # Fallback default log file in project root if not set
 if not PUTTY_LOG_PATH:

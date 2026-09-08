@@ -150,9 +150,11 @@ def activate_window(hwnd: int) -> bool:
         return False
 
 def capture_screen_text(hwnd: int) -> str:
-    """Capture all visible text from a PuTTY window using native IDM_COPYALL."""
+    """Capture all visible text from a PuTTY window using native IDM_COPYALL while preserving user clipboard."""
+    ensure_desktop()
+    orig_text = get_clipboard()
+    result = ""
     try:
-        ensure_desktop()
         try:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
@@ -161,13 +163,25 @@ def capture_screen_text(hwnd: int) -> str:
             pass
         win32gui.SendMessage(hwnd, win32con.WM_SYSCOMMAND, 0x0170, 0)
         for _ in range(5):
-            time.sleep(0.1)
+            time.sleep(0.05)
             text = get_clipboard()
             if text:
-                return text
-        return ""
+                result = text
+                break
     except Exception as e:
-        return ""
+        result = ""
+    finally:
+        # Immediately restore user's original clipboard content
+        if orig_text:
+            set_clipboard(orig_text)
+        else:
+            try:
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.CloseClipboard()
+            except Exception:
+                pass
+    return result
 
 def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_interval: float = 1.0) -> bool:
     """
@@ -185,7 +199,7 @@ def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_int
         time.sleep(poll_interval)
     return False
 
-def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 180) -> bool:
+def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120) -> bool:
     """
     Waits for git worktree checkout (e.g. 43,000 files) to reach 100% and return to shell prompt.
     Does NOT trigger on the pasted command line!
