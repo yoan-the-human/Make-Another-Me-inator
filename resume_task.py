@@ -36,11 +36,18 @@ def resume_active_task():
     
     # 1. Identify active task file
     working_files = sorted(list(config.WORKING_DIR.glob("*.txt")))
+    re_files = sorted(list(config.RE_DIR.glob("*.txt")))
     pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
     
     if working_files:
         task_file = working_files[0]
         print(f"[RESUME] Found in-flight task in working folder: '{task_file.name}'")
+    elif re_files:
+        task_file = re_files[0]
+        working_target = config.WORKING_DIR / task_file.name
+        shutil.move(str(task_file), str(working_target))
+        task_file = working_target
+        print(f"[RESUME] Moved re task to working folder: '{task_file.name}'")
     elif pending_files:
         task_file = pending_files[0]
         working_target = config.WORKING_DIR / task_file.name
@@ -48,7 +55,7 @@ def resume_active_task():
         task_file = working_target
         print(f"[RESUME] Moved pending task to working folder: '{task_file.name}'")
     else:
-        print("[INFO] No tasks found in working/ or pending/ folders to resume!")
+        print("[INFO] No tasks found in working/, re/, or pending/ folders to resume!")
         return False
         
     task_name = task_file.name
@@ -117,22 +124,25 @@ def resume_active_task():
         return False
     
     # 11. Check if queue is empty
+    rem_re = list(config.RE_DIR.glob("*.txt"))
     rem_pending = list(config.PENDING_DIR.glob("*.txt"))
     rem_working = list(config.WORKING_DIR.glob("*.txt"))
-    if not rem_pending and not rem_working:
-        print("\n[QUEUE EMPTY] Both pending and working folders are completely empty!")
-        telegram_alert.send_telegram_message("📢 *Comrade Yoan!* All tasks in `pending` and `working` folders are completed!\nMachine is resting in the bunker.")
+    if not rem_re and not rem_pending and not rem_working:
+        print("\n[QUEUE EMPTY] All task folders (re, pending, working) are completely empty!")
+        telegram_alert.send_telegram_message("📢 *Comrade Yoan!* All tasks in `re`, `pending`, and `working` folders are completed!\nMachine is resting in the bunker.")
     else:
-        print(f"\n[QUEUE] Remaining tasks in pending queue: {len(rem_pending)}")
+        print(f"\n[QUEUE] Remaining tasks: {len(rem_re)} in re, {len(rem_pending)} in pending.")
         
     return True
 
 if __name__ == "__main__":
     success = resume_active_task()
     if success:
+        rem_re = list(config.RE_DIR.glob("*.txt"))
         rem_pending = list(config.PENDING_DIR.glob("*.txt"))
-        if rem_pending:
-            ans = input(f"\nThere are {len(rem_pending)} more tasks in pending. Do you want to run main task runner loop now? (y/n): ").strip().lower()
+        total_rem = len(rem_re) + len(rem_pending)
+        if total_rem > 0:
+            ans = input(f"\nThere are {total_rem} more tasks ({len(rem_re)} in re, {len(rem_pending)} in pending). Do you want to run main task runner loop now? (y/n): ").strip().lower()
             if ans == "y":
                 git_h, claude_h = putty.select_putty_windows(force_prompt=False)
                 watcher = LogWatcher()

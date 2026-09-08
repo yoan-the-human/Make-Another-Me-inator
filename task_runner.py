@@ -46,8 +46,14 @@ def parse_task_file(file_path: Path):
     if branch_match:
         branch_name = branch_match.group(1).strip()
     else:
-        # Fallback if no -b flag
-        branch_name = Path(worktree_dir).name
+        # Check if an existing branch name argument follows worktree_dir (no -b)
+        remainder = line1[worktree_match.end():].strip()
+        tokens = remainder.split()
+        if tokens and not tokens[0].startswith("-"):
+            branch_name = tokens[0]
+        else:
+            # Fallback if no branch argument provided
+            branch_name = Path(worktree_dir).name
         
     return {
         "raw_git_cmd": line1,
@@ -254,7 +260,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     # Step 2: In Git PuTTY, execute worktree command and wait until all files are checked out!
     print("\n[GIT PUITY] 1. Creating worktree and checking out files...")
     marker = "==WORKTREE_READY_100=="
-    git_full_cmd = f"{raw_git_cmd} && cd {worktree_dir} && echo '{marker}'"
+    git_full_cmd = f"cd {config.SERVER_REPO_DIR} && {raw_git_cmd} && cd {worktree_dir} && echo '{marker}'"
     putty.paste_text(git_hwnd, git_full_cmd, press_enter=True)
     
     print(f"[GIT PUITY] Checking out files on server (waiting up to 120s for 100% completion)...")
@@ -305,10 +311,10 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     # Step 7: In Git PuTTY, commit and push changes with auth failure detection & halt
     handle_git_push(git_hwnd, branch_name, commit_msg, worktree_dir)
         
-    # Step 8: Return to base server repo, remove worktree and delete local branch
-    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree ({worktree_dir}) and branch ({branch_name})...")
+    # Step 8: Return to base server repo and remove worktree
+    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR} and removing worktree ({worktree_dir})...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; git branch -D {branch_name} 2>/dev/null ; echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
@@ -341,27 +347,49 @@ class QuotaLimitExceeded(Exception):
 def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     """
     Continuous worker loop:
-    - Processes all tasks in pending/
-    - If a task is in working/ (e.g. from previous run), recovers it to pending/
-    - ONLY engages Telegram alert when BOTH pending/ and working/ are completely empty
-    - Automatically resumes when new tasks appear
+    - High priority: Processes all tasks in re/ folder first!
+    - Second priority: Processes tasks in pending/ folder only once re/ is empty.
+    - Recovers orphaned tasks in working/ back to their appropriate folder (re/ or pending/).
+    - ONLY engages Telegram alert when re/, pending/, and working/ are all completely empty!
+    - Automatically resumes when new tasks appear.
     """
     while True:
+        re_files = sorted(list(config.RE_DIR.glob("*.txt")))
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
         working_files = sorted(list(config.WORKING_DIR.glob("*.txt")))
         
-        # If there are orphaned tasks in working/, recover them to pending/
-        if working_files and not pending_files:
-            print(f"[QUEUE] Found task in working folder: '{working_files[0].name}'. Recovering to pending queue...")
-            task_file = working_files[0]
-            target_pending = config.PENDING_DIR / task_file.name
-            if target_pending.exists():
-                target_pending.unlink()
-            shutil.move(str(task_file), str(target_pending))
-            pending_files = [target_pending]
+        # If there are orphaned tasks in working/ (e.g. from crash or previous run), recover them
+        if working_files and not re_files and not pending_files:
+            for orphan in working_files:
+                is_re = False
+                try:
+                    with open(orphan, "r", encoding="utf-8", errors="ignore") as f:
+                        first_line = f.readline()
+                        if "-b" not in first_line:
+                            is_re = True
+                except Exception:
+                    pass
+                target_dir = config.RE_DIR if is_re else config.PENDING_DIR
+                target_file = target_dir / orphan.name
+                print(f"[QUEUE] Found orphaned task in working folder: '{orphan.name}'. Recovering to {target_dir.name} queue...")
+                if target_file.exists():
+                    target_file.unlink()
+                shutil.move(str(orphan), str(target_file))
+            re_files = sorted(list(config.RE_DIR.glob("*.txt")))
+            pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
         
-        if pending_files:
+        task_file = None
+        origin_dir = None
+        if re_files:
+            task_file = re_files[0]
+            origin_dir = config.RE_DIR
+            print(f"[QUEUE] 🔄 Selecting task from RE folder: '{task_file.name}' (Remaining in re: {len(re_files)})")
+        elif pending_files:
             task_file = pending_files[0]
+            origin_dir = config.PENDING_DIR
+            print(f"[QUEUE] ⏳ Selecting task from PENDING folder: '{task_file.name}' (Remaining in pending: {len(pending_files)})")
+            
+        if task_file:
             try:
                 success = process_single_task(task_file, git_hwnd, claude_hwnd, watcher)
                 if not success:
@@ -372,20 +400,22 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
                 break
             except Exception as e:
                 print(f"[ERROR] Exception during task execution: {e}")
-                # If file got stuck in working folder, move it back to pending so it doesn't get lost
+                # If file got stuck in working folder, move it back to its origin folder
                 working_target = config.WORKING_DIR / task_file.name
                 if working_target.exists():
-                    target_pending = config.PENDING_DIR / task_file.name
-                    if target_pending.exists():
-                        target_pending.unlink()
-                    shutil.move(str(working_target), str(target_pending))
+                    fallback_dir = origin_dir if origin_dir else config.PENDING_DIR
+                    target = fallback_dir / task_file.name
+                    if target.exists():
+                        target.unlink()
+                    shutil.move(str(working_target), str(target))
                 time.sleep(3)
         else:
-            # BOTH pending and working are completely empty!
+            # BOTH re, pending, and working are completely empty!
             has_new = telegram_alert.wait_for_new_task_or_alert(interval_seconds=120)
             if not has_new:
                 break
 
 if __name__ == "__main__":
     print("Testing task runner setup...")
+    print(f"Re-open tasks: {len(list(config.RE_DIR.glob('*.txt')))}")
     print(f"Pending tasks: {len(list(config.PENDING_DIR.glob('*.txt')))}")

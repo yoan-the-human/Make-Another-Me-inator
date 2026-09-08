@@ -12,12 +12,13 @@ if sys.platform == "win32":
 BASE_DIR = Path(__file__).resolve().parent
 TASKS_DIR = BASE_DIR / "tasks"
 PENDING_DIR = TASKS_DIR / "pending"
+RE_DIR = TASKS_DIR / "re"
 WORKING_DIR = TASKS_DIR / "working"
 COMPLETED_DIR = TASKS_DIR / "completed"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 
 # Ensure all task directories exist
-for folder in [PENDING_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
+for folder in [PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
 # Default Server repo root
@@ -66,6 +67,7 @@ if not PUTTY_LOG_PATH:
 if __name__ == "__main__":
     print(f"Project Base: {BASE_DIR}")
     print(f"Pending dir: {PENDING_DIR}")
+    print(f"Re dir:      {RE_DIR}")
     print(f"Git User: {GIT_USERNAME}")
     print(f"Git Pass: {'*' * len(GIT_PASSWORD) if GIT_PASSWORD else 'NOT SET'}")
     print(f"Telegram Chat ID: {TELEGRAM_CHAT_ID}")

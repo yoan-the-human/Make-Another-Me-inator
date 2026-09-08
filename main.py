@@ -30,6 +30,7 @@ BANNER = r"""
 def print_banner():
     print(BANNER)
     print(f"Base Directory:     {config.BASE_DIR}")
+    print(f"Re Directory:       {config.RE_DIR}")
     print(f"Pending Directory:  {config.PENDING_DIR}")
     print(f"Working Directory:  {config.WORKING_DIR}")
     print(f"Completed Directory:{config.COMPLETED_DIR}")
@@ -53,12 +54,14 @@ def main():
     watcher = LogWatcher()
 
     if args.dry_run:
-        print("\n[DRY RUN] Running in dry-run mode. Checking pending tasks...")
+        print("\n[DRY RUN] Running in dry-run mode. Checking re and pending tasks...")
+        re_tasks = list(config.RE_DIR.glob("*.txt"))
         pending = list(config.PENDING_DIR.glob("*.txt"))
-        print(f"Found {len(pending)} pending tasks:")
-        for idx, f in enumerate(pending, 1):
+        print(f"Found {len(re_tasks)} re-open tasks and {len(pending)} pending tasks:")
+        all_tasks = [(f, "RE (Re-open Worktree)") for f in re_tasks] + [(f, "PENDING (New Branch)") for f in pending]
+        for idx, (f, queue_type) in enumerate(all_tasks, 1):
             info = task_runner.parse_task_file(f)
-            print(f"\nTask [{idx}]: {f.name}")
+            print(f"\nTask [{idx}] [{queue_type}]: {f.name}")
             print(f"  Branch:     {info['branch_name']}")
             print(f"  Worktree:   {info['worktree_dir']}")
             print(f"  Commit Msg: {info['commit_message']}")
