@@ -129,10 +129,10 @@ echo "{push_marker}" """
     if not push_ok:
         print("[WARNING] Push marker did not confirm within timeout. Please inspect Git PuTTY window.")
 
-    # 7. In Git PuTTY: cleanup worktree and delete local branch
-    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree and deleting local branch...")
+    # 7. In Git PuTTY: cleanup worktree (preserving branch for testing)
+    print(f"\n[GIT PUITY] Returning to {config.SERVER_REPO_DIR}, removing worktree (preserving branch '{branch_name}')...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} && git branch -D {branch_name} ; echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
@@ -141,13 +141,21 @@ echo "{push_marker}" """
     completed_file = config.COMPLETED_DIR / task_name
     shutil.move(str(task_file), str(completed_file))
     print(f"\n[SUCCESS] ✅ Task '{task_name}' successfully completed and archived to {completed_file}!")
-    
-    # 9. Clear Claude's memory
+
+    # 9. Check Claude session usage
+    usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
+
+    # 10. Clear Claude's memory
     print("\n[CLAUDE PUITY] Sending /clear to wipe memory for next assignment...")
     putty.paste_text(claude_hwnd, "/clear", press_enter=True)
     time.sleep(1.5)
+
+    if is_over_limit:
+        print(f"\n[HALT] 🛑 Claude session quota reached {usage_pct}% (>= {config.USAGE_THRESHOLD}%)!")
+        telegram_alert.send_quota_alert(usage_pct, reset_time)
+        return False
     
-    # 10. Check if queue is empty
+    # 11. Check if queue is empty
     rem_pending = list(config.PENDING_DIR.glob("*.txt"))
     rem_working = list(config.WORKING_DIR.glob("*.txt"))
     if not rem_pending and not rem_working:

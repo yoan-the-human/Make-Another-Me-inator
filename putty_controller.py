@@ -239,6 +239,80 @@ def send_down_arrow(hwnd: int):
         win32gui.PostMessage(hwnd, win32con.WM_CHAR, code, 0)
     time.sleep(0.1)
 
+def send_escape(hwnd: int):
+    """Send Escape key directly to PuTTY window procedure to dismiss dialogs."""
+    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 27, 0)
+    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_ESCAPE, 0x00010001)
+    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_ESCAPE, 0xC0010001)
+    time.sleep(0.1)
+
+def parse_current_session_usage(screen_text: str) -> tuple[float | None, str]:
+    """
+    Parse current session usage percentage and reset time from Claude Code terminal output.
+    Returns (percentage, reset_time_str).
+    """
+    matches = list(re.finditer(
+        r'Current\s+session(?:(?!Current\s+week|Weekly|Total\s+cost).)*?(\d+(?:\.\d+)?)\s*%',
+        screen_text,
+        re.IGNORECASE | re.DOTALL
+    ))
+    pct = float(matches[-1].group(1)) if matches else None
+    
+    # Fallback line-by-line search from bottom up
+    if pct is None:
+        lines = screen_text.splitlines()
+        for i in range(len(lines) - 1, -1, -1):
+            if "current session" in lines[i].lower():
+                for j in range(i, min(i + 4, len(lines))):
+                    m = re.search(r'(\d+(?:\.\d+)?)\s*%', lines[j])
+                    if m:
+                        pct = float(m.group(1))
+                        break
+                if pct is not None:
+                    break
+
+    # Extract reset time if available
+    reset_time = ""
+    reset_matches = list(re.finditer(
+        r'Current\s+session.*?Resets\s+([^\n\r]+)',
+        screen_text,
+        re.IGNORECASE | re.DOTALL
+    ))
+    if reset_matches:
+        reset_time = reset_matches[-1].group(1).strip()
+
+    return pct, reset_time
+
+def check_claude_usage(claude_hwnd: int, threshold: float = None) -> tuple[float | None, str, bool]:
+    """
+    Execute /usage command in Claude PuTTY, capture screen, parse Current Session usage,
+    dismiss the dialog with Escape, and return (percentage, reset_time, is_over_threshold).
+    """
+    if threshold is None:
+        threshold = config.USAGE_THRESHOLD
+
+    print("\n[CLAUDE USAGE] 📊 Checking current session usage via /usage...")
+    paste_text(claude_hwnd, "/usage", press_enter=True)
+    time.sleep(2.0)
+
+    screen = capture_screen_text(claude_hwnd)
+    send_escape(claude_hwnd)
+    time.sleep(0.5)
+
+    pct, reset_time = parse_current_session_usage(screen)
+
+    if pct is not None:
+        reset_info = f" (Resets: {reset_time})" if reset_time else ""
+        print(f"[CLAUDE USAGE] -> Current session usage: {pct}%{reset_info} | Threshold: {threshold}%")
+        is_over = pct >= threshold
+        if is_over:
+            print(f"[CLAUDE USAGE] ⚠️ ALERT: Session usage {pct}% has reached or exceeded {threshold}% limit!")
+        return pct, reset_time, is_over
+    else:
+        print("[CLAUDE USAGE] ⚠️ Could not determine Current Session percentage from terminal screen.")
+        return None, "", False
+
+
 def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool = True):
     """
     Set clipboard, right-click paste into PuTTY, wait for terminal to register, and send Enter.

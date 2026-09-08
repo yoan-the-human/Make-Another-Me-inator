@@ -43,6 +43,16 @@ def send_telegram_message(text: str) -> bool:
         print(f"[TELEGRAM] Connection error: {e}")
         return False
 
+def send_quota_alert(usage_pct: float, reset_time: str = "") -> bool:
+    """
+    Alert user via Telegram that Claude session quota reached or exceeded threshold.
+    """
+    msg = f"⚠️ *Vnimaniye, Comrade Yoan!*\n\nClaude session usage has reached *{usage_pct:.1f}%* (threshold is {config.USAGE_THRESHOLD:.0f}%)!"
+    if reset_time:
+        msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
+    msg += "\n\n🛑 Automated pipeline is halting all tasks to protect your quota from hitting the wall.\nRest by the samovar, drink vodka, and wait for reset, tovarisch! 🪆🐻"
+    return send_telegram_message(msg)
+
 def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
     """
     Called when BOTH pending and working folders are completely empty.

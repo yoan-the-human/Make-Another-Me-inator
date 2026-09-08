@@ -189,10 +189,10 @@ echo "{push_marker}" """
             time.sleep(2.0)
         time.sleep(1.0)
         
-    # Step 8: Return to base server repo, remove worktree, and delete local branch
-    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree and deleting local branch...")
+    # Step 8: Return to base server repo and remove worktree (preserving branch for testing)
+    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR}, removing worktree (preserving branch '{branch_name}')...")
     cleanup_marker = "==CLEANUP_DONE=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} && git branch -D {branch_name} ; echo '{cleanup_marker}'"
+    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
     putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
     putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
     time.sleep(1.0)
@@ -202,12 +202,25 @@ echo "{push_marker}" """
     shutil.move(str(working_file), str(completed_file))
     print(f"\n[SUCCESS] ✅ Task '{task_name}' completed and archived to {completed_file}!\n")
 
-    # Step 10: Clear Claude's context after task completion
+    # Step 10: Check Claude session usage
+    usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
+
+    # Step 11: Clear Claude's context after task completion
     print("[CLAUDE PUITY] 8. Sending /clear to wipe memory for next assignment...")
     putty.paste_text(claude_hwnd, "/clear", press_enter=True)
     time.sleep(1.5)
 
+    if is_over_limit:
+        telegram_alert.send_quota_alert(usage_pct, reset_time)
+        raise QuotaLimitExceeded(usage_pct, reset_time)
+
     return True
+
+class QuotaLimitExceeded(Exception):
+    def __init__(self, usage_pct: float, reset_time: str = ""):
+        self.usage_pct = usage_pct
+        self.reset_time = reset_time
+        super().__init__(f"Claude session quota reached {usage_pct}% >= {config.USAGE_THRESHOLD}% (Resets: {reset_time})")
 
 def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     """
@@ -237,6 +250,10 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
                 success = process_single_task(task_file, git_hwnd, claude_hwnd, watcher)
                 if not success:
                     print(f"[ERROR] Task '{task_file.name}' did not complete successfully.")
+            except QuotaLimitExceeded as qe:
+                print(f"\n[STOPPING] 🛑 Claude session quota is at {qe.usage_pct}% (>= {config.USAGE_THRESHOLD}%)!")
+                print(f"[STOPPING] Telegram alert dispatched. Halting automation pipeline now, tovarisch!\n")
+                break
             except Exception as e:
                 print(f"[ERROR] Exception during task execution: {e}")
                 # If file got stuck in working folder, move it back to pending so it doesn't get lost
