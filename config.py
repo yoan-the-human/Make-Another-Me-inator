@@ -22,7 +22,7 @@ for folder in [PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
 # Default Server repo root
-SERVER_REPO_DIR = "/data/testapp"
+SERVER_REPO_DIR = "/data/development"
 
 # Load .env
 ENV_FILE = BASE_DIR / ".env"

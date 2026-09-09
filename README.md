@@ -87,7 +87,7 @@ For every task in `tasks/pending/`:
    - Automatically sends `Down Arrow` + `Enter` to select **"Yes, move here"**.
    - Pastes the prompt (Line 3+).
    - Monitors `putty_claude.log` until Claude finishes thinking and tool execution.
-   - Runs `/cd /data/testapp` to safely release the worktree directory.
+   - Runs `/cd /data/development` to safely release the worktree directory.
 4. In Git PuTTY:
    - Runs:
      ```bash
@@ -98,7 +98,7 @@ For every task in `tasks/pending/`:
      fi
      ```
    - Automatically enters Username and Password from `.env` lines 1 & 2 when Git prompts.
-   - Runs `cd /data/testapp` and `git worktree remove --force ../tasks/task-XYZ`.
+   - Runs `cd /data/development` and `git worktree remove --force ../tasks/task-XYZ`.
 5. Moves task file to `tasks/completed/`.
 6. Sends `/clear` to Claude PuTTY to wipe memory fresh for the next task.
 7. When `tasks/pending/` is empty:

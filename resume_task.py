@@ -23,7 +23,7 @@ def resume_active_task():
     Resume an in-flight task from right after Claude prompt submission:
     1. Locates active task in tasks/working/ (or tasks/pending/)
     2. Verifies Claude completion in Claude PuTTY
-    3. Commands Claude to exit worktree (/cd /data/testapp)
+    3. Commands Claude to exit worktree (/cd /data/development)
     4. In Git PuTTY: git commit, git push with GitLab MR, enter credentials if prompted
     5. In Git PuTTY: git worktree remove --force <worktree>
     6. Moves task file to tasks/completed/

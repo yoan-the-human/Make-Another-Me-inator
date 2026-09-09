@@ -301,7 +301,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
     # Step 6: Claude leave directory before cleanup
-    print("\n[CLAUDE PUITY] Releasing worktree folder: /cd /data/testapp")
+    print("\n[CLAUDE PUITY] Releasing worktree folder: /cd /data/development")
     putty.paste_text(claude_hwnd, f"/cd {config.SERVER_REPO_DIR}", press_enter=True)
     time.sleep(1.5)
 
