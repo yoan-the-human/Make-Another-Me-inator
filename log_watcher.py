@@ -23,8 +23,8 @@ def clean_ansi(text: str) -> str:
 
 def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
     """
-    Detect if Claude Code is paused asking the user a question, presenting choices,
-    or requesting tool execution permissions.
+    Detect if Claude Code is actively paused asking the user an interactive question,
+    presenting choices, or requesting tool execution permissions.
     Returns (is_asking, question_summary).
     """
     if not screen_text:
@@ -36,18 +36,22 @@ def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
         
     bottom_lines = lines[-25:]
     bottom_text = "\n".join(bottom_lines)
+
+    # If Claude has completed generation and printed '· done', it is NOT in an interactive prompt!
+    if any("· done" in l.lower() for l in bottom_lines):
+        return False, ""
     
     # Check for interactive menu / selection controls (excluding settings/usage dialogs)
     has_choice_nav = any(m in bottom_text.lower() for m in [
         "enter to select", "space to toggle", "space to select", 
-        "arrows to move", "use arrow keys", "type something", 
-        "type something else"
+        "arrows to move", "use arrow keys", "type something else"
     ])
     
-    # Check for numbered or bulleted options (e.g. 1) ... 2) ... or ❯ 1... or [1]... or - ...)
+    # Check for numbered or bracketed choices (e.g. 1) ... 2) ... or ❯ 1... or [1]... or (1)...)
+    # NOTE: Does NOT match simple markdown bullets like "- " or "* " to avoid false positives!
     numbered_options = []
     for line in bottom_lines:
-        m = re.match(r'^(?:❯\s*)?(?:\(\d+\)|\[\d+\]|\d+[\.\)]|[a-zA-Z][\.\)]|\(?\s*[xX\s]\s*\)|[-*•]\s+)\s*(.+)', line)
+        m = re.match(r'^(?:❯\s*)?(?:\(\d+\)|\[\d+\]|\d+[\.\)]|[a-zA-Z][\.\)]|\(?\s*[xX\s]\s*\))\s*(.+)', line)
         if m:
             numbered_options.append(line)
         elif line.lower().startswith("other") or "type something" in line.lower():
@@ -59,13 +63,13 @@ def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
     question_keywords = [
         "would you like", "which option", "choose an option", 
         "select one", "pick 1 of", "pick one of", "please choose",
-        "which approach", "how would you like", "do you prefer", "should i"
+        "which approach", "how would you like", "do you prefer"
     ]
     question_lines = []
     for line in bottom_lines:
         lower = line.lower()
-        if line.startswith("?") or line.endswith("?") or any(kw in lower for kw in question_keywords):
-            if not line.startswith("root@") and not line.startswith("cd ") and not line.startswith("echo "):
+        if (line.startswith("?") or line.endswith("?") or any(kw in lower for kw in question_keywords)):
+            if not line.startswith("root@") and not line.startswith("cd ") and not line.startswith("echo ") and not line.startswith("●"):
                 question_lines.append(line)
 
     has_question_prompt = len(question_lines) > 0
@@ -74,17 +78,6 @@ def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
     has_permission = any(q in bottom_text.lower() for q in [
         "allow?", "[y/n]", "(y/n)", "yes/no", "[y/n/always]", "allow tool", "allow command", "do you want to proceed"
     ])
-
-    # Check the last meaningful line before prompt (if prompt ❯ is visible)
-    meaningful_lines_before_prompt = []
-    for l in bottom_lines:
-        if l.startswith("❯") or l == "❯":
-            break
-        if not all(c in "─-=_ " for c in l) and not l.startswith("root@"):
-            meaningful_lines_before_prompt.append(l)
-
-    last_meaningful = meaningful_lines_before_prompt[-1] if meaningful_lines_before_prompt else ""
-    last_is_question = (last_meaningful.endswith("?") or any(kw in last_meaningful.lower() for kw in question_keywords))
 
     is_asking = False
     details = []
@@ -96,25 +89,16 @@ def detect_claude_question_or_choice(screen_text: str) -> tuple[bool, str]:
             if any(q in line.lower() for q in ["allow", "y/n", "yes/no", "proceed"]):
                 details.append(line)
                 break
-    elif has_choice_nav or (has_multiple_options and (has_question_prompt or any("❯" in opt for opt in numbered_options))):
+    elif has_choice_nav:
         is_asking = True
         if question_lines:
             details.append(question_lines[-1])
         details.extend(numbered_options[:5])
-    elif has_question_prompt and has_multiple_options:
+    elif has_multiple_options and (has_question_prompt or any("❯" in opt for opt in numbered_options)):
         is_asking = True
-        details.append(question_lines[-1])
+        if question_lines:
+            details.append(question_lines[-1])
         details.extend(numbered_options[:5])
-    elif has_question_prompt and any(line.startswith("?") for line in question_lines):
-        is_asking = True
-        details.append(question_lines[-1])
-        if numbered_options:
-            details.extend(numbered_options[:5])
-    elif last_is_question and (has_multiple_options or len(meaningful_lines_before_prompt) >= 1):
-        is_asking = True
-        details.append(last_meaningful)
-        if numbered_options:
-            details.extend(numbered_options[:5])
 
     summary = "\n".join(details) if details else ""
     return is_asking, summary
@@ -272,26 +256,25 @@ class LogWatcher:
                     telegram_alert.send_answered_notification()
                     in_question_mode = False
 
-            # 2. Is Claude asking a question or waiting for user choice/permission?
-            if is_asking:
+            # 2. Is Claude genuinely done?
+            has_done = any("· done" in l.lower() for l in bottom_lines)
+            has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
+
+            if not is_busy and (has_done or (has_prompt and not is_asking)):
+                print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
+                return True
+
+            # 3. Is Claude asking an interactive question or waiting for user choice/permission?
+            if is_asking and not is_busy and not has_done:
                 elapsed_mins = int((time.time() - start_time) / 60)
                 print(f"\n[CLAUDE MONITOR] ❓ Claude is waiting for user decision in PuTTY ({elapsed_mins}m elapsed)!")
                 in_question_mode = True
                 # Alert every 2 minutes
                 telegram_alert.send_question_alert(q_details)
             elif is_busy:
-                # 3. Is Claude actively working?
+                # 4. Is Claude actively working?
                 elapsed_mins = int((time.time() - start_time) / 60)
                 print(f"[CLAUDE MONITOR] ⏳ Claude is actively working... ({elapsed_mins}m elapsed)")
-            else:
-                # 4. Is Claude genuinely done?
-                # Claude is NOT busy and NOT asking a question.
-                has_done = any("· done" in l.lower() for l in bottom_lines)
-                has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
-
-                if has_done or has_prompt:
-                    print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
-                    return True
 
             # Sleep poll_interval seconds in 1s increments for responsive interruption
             sleep_needed = poll_interval
