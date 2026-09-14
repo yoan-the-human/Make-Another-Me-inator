@@ -237,6 +237,32 @@ def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120, mark
     print("[WARNING] Timed out waiting for worktree checkout!")
     return False
 
+def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int = 60) -> bool:
+    """
+    Waits for git checkout/branch creation in Git PuTTY to complete and echo marker.
+    Checks recent terminal lines (bottom 30) for isolated marker and branch switch confirmation.
+    """
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        screen = capture_screen_text(hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-30:]
+
+        has_marker = any(
+            (l == marker or l == f"'{marker}'" or l == f'"{marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
+        )
+        if has_marker:
+            print(f"[GIT PUITY] ✅ Switched to branch '{branch_name}' successfully!")
+            return True
+
+        time.sleep(1.0)
+
+    print(f"[WARNING] Timed out waiting for branch switch confirmation for '{branch_name}'!")
+    return False
+
+
 def flash_window(hwnd: int):
     """Flash window caption bar to visually draw user attention."""
     try:

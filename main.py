@@ -30,10 +30,12 @@ BANNER = r"""
 def print_banner():
     print(BANNER)
     print(f"Base Directory:     {config.BASE_DIR}")
+    print(f"Merged Directory:   {config.MERGED_DIR}")
     print(f"Re Directory:       {config.RE_DIR}")
     print(f"Pending Directory:  {config.PENDING_DIR}")
     print(f"Working Directory:  {config.WORKING_DIR}")
     print(f"Completed Directory:{config.COMPLETED_DIR}")
+    print(f"Archive Directory:  {config.ARCHIVE_DIR}")
     print(f"Git User:           {config.GIT_USERNAME}")
     print(f"Telegram Chat:      {config.TELEGRAM_CHAT_ID}")
     print(f"PuTTY Log:          {config.PUTTY_LOG_PATH}")
@@ -54,18 +56,26 @@ def main():
     watcher = LogWatcher()
 
     if args.dry_run:
-        print("\n[DRY RUN] Running in dry-run mode. Checking re and pending tasks...")
+        print("\n[DRY RUN] Running in dry-run mode. Checking merged, re, and pending tasks...")
+        merged_tasks = list(config.MERGED_DIR.glob("*.txt"))
         re_tasks = list(config.RE_DIR.glob("*.txt"))
         pending = list(config.PENDING_DIR.glob("*.txt"))
-        print(f"Found {len(re_tasks)} re-open tasks and {len(pending)} pending tasks:")
-        all_tasks = [(f, "RE (Re-open Worktree)") for f in re_tasks] + [(f, "PENDING (New Branch)") for f in pending]
+        print(f"Found {len(merged_tasks)} merged tasks, {len(re_tasks)} re-open tasks, and {len(pending)} pending tasks:")
+        all_tasks = (
+            [(f, "MERGED (Delete Local Branch)") for f in merged_tasks] +
+            [(f, "RE (Existing Branch)") for f in re_tasks] +
+            [(f, "PENDING (New Branch)") for f in pending]
+        )
         for idx, (f, queue_type) in enumerate(all_tasks, 1):
             info = task_runner.parse_task_file(f)
             print(f"\nTask [{idx}] [{queue_type}]: {f.name}")
-            print(f"  Branch:     {info['branch_name']}")
-            print(f"  Worktree:   {info['worktree_dir']}")
-            print(f"  Commit Msg: {info['commit_message']}")
-            print(f"  Prompt:     {info['prompt'][:80]}...")
+            print(f"  Branch:     {info['branch_name']} ({'NEW' if info['is_new_branch'] else 'EXISTING'})")
+            print(f"  Directory:  {config.SERVER_REPO_DIR}")
+            if "MERGED" in queue_type:
+                print("  Action:     Check if development is on this branch; if not, git branch -d")
+            else:
+                print(f"  Commit Msg: {info['commit_message']}")
+                print(f"  Prompt:     {info['prompt'][:80]}...")
         print("\n[DRY RUN] Finished verification without sending keystrokes!")
         return
 

@@ -102,29 +102,33 @@ def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
     Alerts user every `interval_seconds`, but checks every second if a new file appeared.
     Returns True if a new task was detected, False if stopped.
     """
+    merged_files = list(config.MERGED_DIR.glob("*.txt"))
     re_files = list(config.RE_DIR.glob("*.txt"))
     pending_files = list(config.PENDING_DIR.glob("*.txt"))
     working_files = list(config.WORKING_DIR.glob("*.txt"))
     
-    if re_files or pending_files or working_files:
+    if merged_files or re_files or pending_files or working_files:
         return True # Not empty, do not send false completion alert!
 
-    print(f"\n[QUEUE EMPTY] All task folders (re, pending, working) are empty! Will alert via Telegram every {interval_seconds}s until new task appears.")
+    print(f"\n[QUEUE EMPTY] All task folders (merged, re, pending, working) are empty! Will alert via Telegram every {interval_seconds}s until new task appears.")
     
     # Send initial alert
-    send_telegram_message("📢 *Comrade Yoan!* All tasks in `re`, `pending`, and `working` folders are completed!\nWaiting for new tasks...")
+    send_telegram_message("📢 *Comrade Yoan!* All tasks in `merged`, `re`, `pending`, and `working` folders are completed!\nWaiting for new tasks...")
     
     elapsed = 0
     while True:
         if stop_event and stop_event.is_set():
             return False
             
-        # Check if new files dropped into re, pending or working
+        # Check if new files dropped into merged, re, pending or working
+        merged_files = list(config.MERGED_DIR.glob("*.txt"))
         re_files = list(config.RE_DIR.glob("*.txt"))
         pending_files = list(config.PENDING_DIR.glob("*.txt"))
         working_files = list(config.WORKING_DIR.glob("*.txt"))
-        if re_files or pending_files or working_files:
-            if re_files:
+        if merged_files or re_files or pending_files or working_files:
+            if merged_files:
+                found_name = f"merged/{merged_files[0].name}"
+            elif re_files:
                 found_name = f"re/{re_files[0].name}"
             elif pending_files:
                 found_name = f"pending/{pending_files[0].name}"
@@ -138,7 +142,7 @@ def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
         elapsed += 1
         
         if elapsed >= interval_seconds:
-            send_telegram_message("⏳ *Reminder:* Both `re` and `pending` task folders are still empty. Machine is resting in the bunker.")
+            send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
             elapsed = 0
 
 if __name__ == "__main__":

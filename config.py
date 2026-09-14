@@ -11,6 +11,7 @@ if sys.platform == "win32":
 
 BASE_DIR = Path(__file__).resolve().parent
 TASKS_DIR = BASE_DIR / "tasks"
+MERGED_DIR = TASKS_DIR / "merged"
 PENDING_DIR = TASKS_DIR / "pending"
 RE_DIR = TASKS_DIR / "re"
 WORKING_DIR = TASKS_DIR / "working"
@@ -18,7 +19,7 @@ COMPLETED_DIR = TASKS_DIR / "completed"
 ARCHIVE_DIR = TASKS_DIR / "archive"
 
 # Ensure all task directories exist
-for folder in [PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
+for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
 # Default Server repo root

@@ -17,10 +17,10 @@ import putty_controller as putty
 from log_watcher import LogWatcher
 import telegram_alert
 
-def parse_task_file(file_path: Path):
+def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
     """
     Parse a task text file.
-    Line 1: Git worktree command e.g. git worktree add ../tasks/task-XYZ -b feature/XYZ
+    Line 1: Git branch command or branch name (e.g. "new/catalog-videos" or new/catalog-videos or git checkout -b ...)
     Line 2: Commit message
     Line 3+: Prompt for Claude
     """
@@ -30,67 +30,77 @@ def parse_task_file(file_path: Path):
     if len(lines) < 2:
         raise ValueError(f"Task file {file_path.name} is too short (needs at least 2 lines)!")
         
-    line1 = lines[0].strip()
+    line1 = lines[0].strip().strip('"\'')
     line2 = lines[1].strip()
     prompt = "\n".join(lines[2:]).strip() if len(lines) > 2 else ""
     
-    # Extract worktree directory
-    # matches: git worktree add <dir> -b <branch>
-    worktree_match = re.search(r'git\s+worktree\s+add\s+([^\s]+)', line1)
-    if not worktree_match:
-        raise ValueError(f"Could not extract worktree directory from Line 1: '{line1}'")
-    worktree_dir = worktree_match.group(1).strip()
-    
+    # Determine if this creates a new branch or switches to an existing branch
+    if is_new_branch is not None:
+        is_new = is_new_branch
+    else:
+        if bool(re.search(r'(?:^|\s)(?:-b|-c|--create)\s+', line1)):
+            is_new = True
+        elif "pending" in file_path.parent.name.lower():
+            is_new = True
+        elif "re" in file_path.parent.name.lower():
+            is_new = False
+        else:
+            # If in working folder or root, check if line1 starts with new/ or feat/
+            is_new = any(line1.lower().startswith(p) for p in ["new/", "feat/", "feature/"])
+
     # Extract branch name
-    branch_match = re.search(r'-b\s+([^\s]+)', line1)
+    branch_match = re.search(r'(?:-b|-c|--create)\s+([^\s]+)', line1)
     if branch_match:
         branch_name = branch_match.group(1).strip()
-    else:
-        # Check if an existing branch name argument follows worktree_dir (no -b)
-        remainder = line1[worktree_match.end():].strip()
-        tokens = remainder.split()
-        if tokens and not tokens[0].startswith("-"):
-            branch_name = tokens[0]
+    elif "git worktree add" in line1:
+        # Legacy worktree format without -b: git worktree add <dir> <branch>
+        m = re.search(r'git\s+worktree\s+add\s+[^\s]+\s+([^\s]+)', line1)
+        if m:
+            branch_name = m.group(1).strip()
         else:
-            # Fallback if no branch argument provided
-            branch_name = Path(worktree_dir).name
-        
+            m2 = re.search(r'git\s+worktree\s+add\s+([^\s]+)', line1)
+            branch_name = Path(m2.group(1)).name.replace("task-", "") if m2 else file_path.stem
+    elif line1.startswith("git checkout") or line1.startswith("git switch"):
+        # e.g. git checkout <branch> or git switch <branch>
+        tokens = line1.split()
+        branch_tokens = [t for t in tokens[2:] if not t.startswith("-")]
+        branch_name = branch_tokens[0] if branch_tokens else file_path.stem
+    else:
+        # Bare line or unrecognized prefix, e.g. "new/catalog-videos-something"
+        tokens = line1.split()
+        branch_name = tokens[0] if tokens else file_path.stem
+
+    # Strip punctuation/quotes
+    branch_name = branch_name.strip("'\";&")
+
     return {
         "raw_git_cmd": line1,
-        "worktree_dir": worktree_dir,
         "branch_name": branch_name,
+        "is_new_branch": is_new,
         "commit_message": line2,
         "prompt": prompt
     }
 
-def resolve_server_worktree_path(worktree_dir: str) -> str:
-    """Resolve relative worktree path (e.g. '../tasks/task-XYZ') to absolute '/data/tasks/task-XYZ'."""
-    if worktree_dir.startswith("/"):
-        return worktree_dir
-    clean = worktree_dir.replace("../", "").lstrip("/")
-    return f"/data/{clean}"
-
-def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, worktree_dir: str) -> bool:
+def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: str = config.SERVER_REPO_DIR) -> bool:
     """
-    Execute git add, commit, and push with Merge Request creation.
+    Execute git add, commit, and push with Merge Request creation directly in repo_dir (/data/development).
     - Dynamically monitors for credentials prompts (Username/Password).
     - If authentication fails or push fails: halts pipeline, alerts via Telegram,
       and waits until user provides credentials/pushes and Git confirmation is detected!
     """
-    abs_worktree_dir = resolve_server_worktree_path(worktree_dir)
     push_uid = f"{int(time.time())}_{os.getpid()}"
     push_ok_marker = f"==PUSH_OK_{push_uid}=="
     push_fail_marker = f"==PUSH_FAIL_{push_uid}=="
 
     git_script = (
-        f"cd {abs_worktree_dir} && "
+        f"cd {repo_dir} && "
         f"if [ -n \"$(git status --porcelain)\" ]; then git add . && git commit -m \"{commit_msg}\" ; fi ; "
         f"git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main ; "
         f"PUSH_RC=$? ; "
         f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
     )
 
-    print(f"\n[GIT PUITY] 5. Checking git status, committing, and pushing branch '{branch_name}'...")
+    print(f"\n[GIT PUITY] 4. Checking git status, committing, and pushing branch '{branch_name}' in {repo_dir}...")
     putty.paste_text(git_hwnd, git_script, press_enter=True)
 
     print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
@@ -160,13 +170,13 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, worktree_d
     # --- HALT AND TELEGRAM ALERT ---
     print("\n" + "=" * 65)
     print("🚨 [PIPELINE HALTED] GIT PUSH FAILED OR REQUIRES MANUAL INTERACTION!")
-    print(f"Branch:   {branch_name}")
-    print(f"Worktree: {abs_worktree_dir}")
+    print(f"Branch:     {branch_name}")
+    print(f"Repository: {repo_dir}")
     print("Please open Git PuTTY, enter credentials or execute push manually.")
     print("Script is waiting for Git confirmation message...")
     print("=" * 65 + "\n")
 
-    telegram_alert.send_git_auth_failed_alert(branch_name, abs_worktree_dir)
+    telegram_alert.send_git_auth_failed_alert(branch_name, repo_dir)
 
     # Confirmation patterns indicating push succeeded
     confirmation_patterns = [
@@ -216,16 +226,89 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, worktree_d
 
         time.sleep(2.0)
 
-def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
+def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
     """
-    Execute full workflow for a single task:
-    1. Move pending -> working
-    2. Git worktree create & cd
-    3. Claude /clear, /cd, trust prompt navigation, paste prompt, wait completion
-    4. Git commit, push with credentials, worktree cleanup
-    5. Move working -> completed
+    Process a file in tasks/merged/:
+    1. Read Line 1 to extract branch_name.
+    2. In Git PuTTY, check if /data/development is currently on that branch.
+    3. If yes: do nothing, leave file in tasks/merged/.
+    4. If not: execute 'git branch -d {branch_name}', archive file to tasks/archive/.
     """
     task_name = task_file.name
+    try:
+        task_info = parse_task_file(task_file, is_new_branch=False)
+        branch_name = task_info["branch_name"]
+    except Exception as e:
+        print(f"[MERGED QUEUE] ⚠️ Failed to parse branch from '{task_name}': {e}")
+        return False
+
+    uid = f"{int(time.time() * 1000)}_{os.getpid()}"
+    active_marker = f"==BRANCH_ACTIVE_{uid}=="
+    deleted_marker = f"==BRANCH_DELETED_{uid}=="
+
+    check_cmd = (
+        f"cd {config.SERVER_REPO_DIR} && "
+        f"CUR_B=$(git branch --show-current) ; "
+        f"if [ \"$CUR_B\" = \"{branch_name}\" ]; then "
+        f"echo '{active_marker}' ; "
+        f"else "
+        f"git branch -d \"{branch_name}\" ; "
+        f"echo '{deleted_marker}' ; "
+        f"fi"
+    )
+
+    print(f"\n[MERGED QUEUE] 🧹 Checking branch '{branch_name}' from '{task_name}' in {config.SERVER_REPO_DIR}...")
+    putty.paste_text(git_hwnd, check_cmd, press_enter=True)
+
+    start_time = time.time()
+    while time.time() - start_time < 30:
+        screen = putty.capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-25:]
+
+        is_active = any(
+            (l == active_marker or l == f"'{active_marker}'" or l == f'"{active_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
+        )
+        if is_active:
+            print(f"[MERGED QUEUE] ⏸️ Development is currently on branch '{branch_name}'! Doing nothing; file remains in merged/.\n")
+            return False
+
+        is_deleted = any(
+            (l == deleted_marker or l == f"'{deleted_marker}'" or l == f'"{deleted_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
+        )
+        if is_deleted:
+            print(f"[MERGED QUEUE] ✅ Branch '{branch_name}' deleted (`git branch -d`)!")
+            archive_target = config.ARCHIVE_DIR / task_name
+            if archive_target.exists():
+                archive_target.unlink()
+            shutil.move(str(task_file), str(archive_target))
+            print(f"[MERGED QUEUE] 📦 Archived '{task_name}' to {archive_target}\n")
+            return True
+
+        time.sleep(1.0)
+
+    print(f"[MERGED QUEUE] ⚠️ Timed out waiting for check/delete marker for '{branch_name}'.\n")
+    return False
+
+def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
+    """
+    Execute full workflow for a single task directly in /data/development:
+    1. Move pending/re -> working
+    2. Git branch switch/creation (new branch off origin/main, or existing branch)
+    3. Claude /clear, paste prompt, wait completion
+    4. Git commit & push with credentials handling
+    5. Stay on branch (no cleanup, no switch to main)
+    6. Move working -> completed
+    7. Usage check & /clear
+    """
+    task_name = task_file.name
+    origin_parent = task_file.parent.name.lower()
+    is_from_pending = (origin_parent == "pending")
+
     print(f"\n=======================================================")
     print(f"🚀 STARTING TASK: {task_name}")
     print(f"=======================================================")
@@ -237,60 +320,53 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     
     # Parse file
     try:
-        task_info = parse_task_file(working_file)
+        task_info = parse_task_file(working_file, is_new_branch=is_from_pending)
     except Exception as e:
         print(f"[ERROR] Failed to parse task file: {e}")
         return False
         
-    raw_git_cmd = task_info["raw_git_cmd"]
-    worktree_dir = task_info["worktree_dir"]
-    abs_worktree_dir = resolve_server_worktree_path(worktree_dir)
     branch_name = task_info["branch_name"]
+    is_new = task_info["is_new_branch"]
     commit_msg = task_info["commit_message"].replace('"', '\\"') # escape quotes for bash
     prompt = task_info["prompt"]
     
-    print(f"  -> Worktree Dir: {worktree_dir} (Absolute: {abs_worktree_dir})")
-    print(f"  -> Branch Name:   {branch_name}")
+    print(f"  -> Repository:    {config.SERVER_REPO_DIR}")
+    print(f"  -> Branch:        {branch_name} ({'NEW branch off origin/main' if is_new else 'EXISTING branch'})")
     print(f"  -> Commit Msg:    {commit_msg}")
     print(f"  -> Prompt length: {len(prompt)} chars")
 
-    # Step 2: In Git PuTTY, execute worktree command and wait until all files are checked out!
-    print("\n[GIT PUITY] 1. Creating worktree and checking out files...")
-    marker = f"==WORKTREE_READY_{int(time.time() * 1000)}=="
-    git_full_cmd = f"cd {config.SERVER_REPO_DIR} && {raw_git_cmd} && cd {worktree_dir} && echo '{marker}'"
-    putty.paste_text(git_hwnd, git_full_cmd, press_enter=True)
-    
-    print(f"[GIT PUITY] Checking out files on server (waiting up to 120s for 100% completion)...")
-    ready = putty.wait_for_git_worktree(git_hwnd, worktree_dir, timeout=120, marker=marker)
-    if not ready:
-        print("[WARNING] Worktree checkout did not confirm via marker. Waiting extra 5s...")
-        time.sleep(5.0)
+    # Step 2: In Git PuTTY, switch or create branch in /data/development
+    marker = f"==BRANCH_READY_{int(time.time() * 1000)}=="
+    if is_new:
+        print(f"\n[GIT PUITY] 1. Fetching origin main and checking out new branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        git_cmd = (
+            f"cd {config.SERVER_REPO_DIR} && "
+            f"git fetch origin main && "
+            f"git checkout -B {branch_name} origin/main && "
+            f"echo '{marker}'"
+        )
+    else:
+        print(f"\n[GIT PUITY] 1. Switching to existing branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        git_cmd = (
+            f"cd {config.SERVER_REPO_DIR} && "
+            f"git checkout {branch_name} && "
+            f"echo '{marker}'"
+        )
 
-    # Step 3: In Claude PuTTY, switch directory and navigate trust prompt
+    putty.paste_text(git_hwnd, git_cmd, press_enter=True)
+    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60)
+    if not ready:
+        print("[WARNING] Branch switch did not confirm via marker. Waiting extra 3s...")
+        time.sleep(3.0)
+
+    # Step 3: In Claude PuTTY, clear previous context
+    # Claude is permanently in /data/development - no /cd hopping, no trust dialogs!
     print("\n[CLAUDE PUITY] 2. Clearing previous context (/clear)...")
     putty.paste_text(claude_hwnd, "/clear", press_enter=True)
-    time.sleep(2.0)
-    
-    print(f"[CLAUDE PUITY] 3. Changing Claude directory: /cd {abs_worktree_dir}")
-    watcher.mark_start()
-    putty.paste_text(claude_hwnd, f"/cd {abs_worktree_dir}", press_enter=True)
     time.sleep(1.5)
-    
-    # Check if trust prompt appears
-    print("[CLAUDE PUITY] Checking for directory trust prompt...")
-    has_trust_prompt = watcher.wait_for_trust_prompt(timeout=6, claude_hwnd=claude_hwnd)
-    if has_trust_prompt:
-        print("[CLAUDE PUITY] Detected directory trust prompt! Selecting 'Yes, move here' (Down Arrow + Enter)...")
-        time.sleep(0.5)
-        putty.send_down_arrow(claude_hwnd)
-        time.sleep(0.3)
-        putty.send_enter(claude_hwnd)
-        time.sleep(2.0)
-    else:
-        print("[CLAUDE PUITY] No trust prompt detected (or directory already trusted).")
 
     # Step 4: In Claude PuTTY, send the prompt
-    print("\n[CLAUDE PUITY] 4. Sending task prompt to Claude...")
+    print("\n[CLAUDE PUITY] 3. Sending task prompt to Claude...")
     watcher.mark_start()
     putty.paste_text(claude_hwnd, prompt, press_enter=True)
     
@@ -300,32 +376,22 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     if not completed:
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
-    # Step 6: Claude leave directory before cleanup
-    print("\n[CLAUDE PUITY] Releasing worktree folder: /cd /data/development")
-    putty.paste_text(claude_hwnd, f"/cd {config.SERVER_REPO_DIR}", press_enter=True)
-    time.sleep(1.5)
-
-    # Step 7: In Git PuTTY, commit and push changes with auth failure detection & halt
-    handle_git_push(git_hwnd, branch_name, commit_msg, worktree_dir)
+    # Step 6: In Git PuTTY, commit and push changes directly from /data/development
+    handle_git_push(git_hwnd, branch_name, commit_msg, config.SERVER_REPO_DIR)
         
-    # Step 8: Return to base server repo and remove worktree
-    print(f"\n[GIT PUITY] 6. Returning to {config.SERVER_REPO_DIR} and removing worktree ({worktree_dir})...")
-    cleanup_marker = f"==CLEANUP_DONE_{int(time.time() * 1000)}=="
-    cleanup_cmd = f"cd {config.SERVER_REPO_DIR} && git worktree remove --force {worktree_dir} ; echo '{cleanup_marker}'"
-    putty.paste_text(git_hwnd, cleanup_cmd, press_enter=True)
-    putty.wait_for_screen_text(git_hwnd, [cleanup_marker], timeout=30)
-    time.sleep(1.0)
+    # Note: Stay on branch! No worktree removal and no git checkout main.
+    print(f"\n[GIT PUITY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR} (no cleanup or switch needed).")
 
-    # Step 9: Move file to completed folder
+    # Step 7: Move file to completed folder
     completed_file = config.COMPLETED_DIR / task_name
     shutil.move(str(working_file), str(completed_file))
     print(f"\n[SUCCESS] ✅ Task '{task_name}' completed and archived to {completed_file}!\n")
 
-    # Step 10: Check Claude session usage
+    # Step 8: Check Claude session usage
     usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
 
-    # Step 11: Clear Claude's context after task completion
-    print("[CLAUDE PUITY] 8. Sending /clear to wipe memory for next assignment...")
+    # Step 9: Clear Claude's context after task completion
+    print("[CLAUDE PUITY] 5. Sending /clear to wipe memory for next assignment...")
     putty.paste_text(claude_hwnd, "/clear", press_enter=True)
     time.sleep(1.5)
 
@@ -346,11 +412,21 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     Continuous worker loop:
     - High priority: Processes all tasks in re/ folder first!
     - Second priority: Processes tasks in pending/ folder only once re/ is empty.
+    - Priority 0: Checks merged/ folder first to delete merged branches!
+    - High priority: Processes all tasks in re/ folder first!
+    - Second priority: Processes tasks in pending/ folder only once re/ is empty.
     - Recovers orphaned tasks in working/ back to their appropriate folder (re/ or pending/).
-    - ONLY engages Telegram alert when re/, pending/, and working/ are all completely empty!
+    - ONLY engages Telegram alert when all task folders are completely empty!
     - Automatically resumes when new tasks appear.
     """
     while True:
+        # Priority 0: Clean up merged branches first!
+        merged_files = sorted(list(config.MERGED_DIR.glob("*.txt")))
+        if merged_files:
+            for m_file in merged_files:
+                handle_merged_branch_cleanup(git_hwnd, m_file)
+                time.sleep(0.5)
+
         re_files = sorted(list(config.RE_DIR.glob("*.txt")))
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
         working_files = sorted(list(config.WORKING_DIR.glob("*.txt")))
@@ -360,10 +436,9 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
             for orphan in working_files:
                 is_re = False
                 try:
-                    with open(orphan, "r", encoding="utf-8", errors="ignore") as f:
-                        first_line = f.readline()
-                        if "-b" not in first_line:
-                            is_re = True
+                    task_info = parse_task_file(orphan)
+                    if not task_info["is_new_branch"]:
+                        is_re = True
                 except Exception:
                     pass
                 target_dir = config.RE_DIR if is_re else config.PENDING_DIR
