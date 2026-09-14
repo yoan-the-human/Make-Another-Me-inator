@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v0.1.0...v1.0.0) (2026-09-14)
+
+
+### ⚡ Improvements
+
+* the whole process is majorly simplified. No more worktrees, only branches ([5d063ad](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/5d063ad5f5b58210c3f149e3d969dc76a3d16151))
+
 ## 0.1.0 (2026-09-14)
 
 
