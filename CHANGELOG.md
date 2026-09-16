@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.0...v1.0.1) (2026-09-16)
+
+
+### 🐛 Bugs
+
+* fixed a bug where the script didnt write the username and password on the first step ([09e173a](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/09e173a32aad0948b8e20ddcebef9ffe282abf7a))
+* merged folder loop bug fixed ([7882467](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/78824672844de0b088b71fc0b056129fc684de1a))
+
 ## [1.0.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v0.1.0...v1.0.0) (2026-09-14)
 
 
