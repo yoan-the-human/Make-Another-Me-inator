@@ -241,7 +241,7 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
     """
     Waits for git checkout/branch creation in Git PuTTY to complete and echo marker.
     - Dynamically monitors for credentials prompts (Username/Password) and fills them automatically.
-    - Checks recent terminal lines (bottom 30) for isolated marker and branch switch confirmation.
+    - Checks recent terminal lines for isolated marker and branch switch confirmation.
     """
     start_time = time.time()
     user_sent = False
@@ -251,7 +251,8 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
         screen = capture_screen_text(hwnd)
         lines = [l.strip() for l in screen.splitlines() if l.strip()]
         recent_lines = lines[-30:]
-        recent_text = "\n".join(recent_lines)
+        bottom_lines = lines[-5:] if len(lines) >= 5 else lines
+        bottom_text = "\n".join(bottom_lines).lower()
 
         # 1. Check success marker
         has_marker = any(
@@ -263,38 +264,41 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
             print(f"[GIT PUITY] ✅ Switched to branch '{branch_name}' successfully!")
             return True
 
-        # 2. Check for authentication errors
-        has_auth_err = any(err in recent_text.lower() for err in [
-            "authentication failed",
-            "access denied",
-            "invalid username or password",
-            "fatal: could not read username",
-            "fatal: could not read password",
-            "fatal: authentication"
-        ])
-        if has_auth_err and (user_sent or pass_sent):
-            print(f"\n[GIT PUITY] 🚨 Authentication failed during git fetch for branch '{branch_name}'!")
-            return False
-
-        # 3. Handle Username prompt
-        if not user_sent and any("Username for" in l for l in recent_lines[-5:]):
+        # 2. Handle Username prompt (Check before error checks!)
+        if not user_sent and any("username for" in l.lower() for l in bottom_lines):
             print("[GIT PUITY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
             time.sleep(1.0)
-        # 4. Handle Password prompt
-        elif not pass_sent and any("Password for" in l for l in recent_lines[-5:]):
+            continue
+
+        # 3. Handle Password prompt (Check before error checks!)
+        if not pass_sent and any("password for" in l.lower() for l in bottom_lines):
             print("[GIT PUITY] Detected Password prompt! Entering password...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_PASSWORD, press_enter=True)
             pass_sent = True
             time.sleep(2.0)
+            continue
+
+        # 4. Check for authentication errors ONLY after password has been submitted!
+        if pass_sent:
+            has_auth_err = any(err in bottom_text for err in [
+                "authentication failed",
+                "access denied",
+                "invalid username or password",
+                "fatal: authentication"
+            ])
+            if has_auth_err:
+                print(f"\n[GIT PUITY] 🚨 Authentication failed after entering password for branch '{branch_name}'!")
+                return False
 
         time.sleep(1.0)
 
     print(f"[WARNING] Timed out waiting for branch switch confirmation for '{branch_name}'!")
     return False
+
 
 
 

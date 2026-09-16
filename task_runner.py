@@ -125,39 +125,44 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
             print("[GIT PUITY] ✅ Push and commit completed successfully!")
             return True
 
-        # 2. Check for failure marker or authentication errors
-        has_fail_marker = any(
-            (l == push_fail_marker or l == f'"{push_fail_marker}"' or l == f"'{push_fail_marker}'")
-            for l in recent_lines
-            if not l.startswith("echo") and not l.startswith("root@") and "PUSH_RC" not in l
-        )
-        has_auth_err = any(err in recent_text.lower() for err in [
-            "authentication failed",
-            "access denied",
-            "invalid username or password",
-            "fatal: could not read username",
-            "fatal: could not read password",
-            "fatal: authentication"
-        ])
+        bottom_lines = recent_lines[-5:] if len(recent_lines) >= 5 else recent_lines
+        bottom_text = "\n".join(bottom_lines).lower()
 
-        if has_fail_marker or (has_auth_err and (user_sent or pass_sent)):
-            print("\n[GIT PUITY] 🚨 Authentication or git push failure detected!")
-            auth_failed = True
-            break
-
-        # 3. Handle Username prompt
-        if not user_sent and any("Username for" in l for l in recent_lines[-5:]):
+        # 2. Handle Username prompt (Check before error checks!)
+        if not user_sent and any("username for" in l.lower() for l in bottom_lines):
             print("[GIT PUITY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
             time.sleep(1.0)
-        # 4. Handle Password prompt
-        elif not pass_sent and any("Password for" in l for l in recent_lines[-5:]):
+            continue
+
+        # 3. Handle Password prompt (Check before error checks!)
+        elif not pass_sent and any("password for" in l.lower() for l in bottom_lines):
             print("[GIT PUITY] Detected Password prompt! Entering password...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
             pass_sent = True
+            time.sleep(2.0)
+            continue
+
+        # 4. Check for failure marker or authentication errors ONLY after password has been submitted!
+        has_fail_marker = any(
+            (l == push_fail_marker or l == f'"{push_fail_marker}"' or l == f"'{push_fail_marker}'")
+            for l in recent_lines
+            if not l.startswith("echo") and not l.startswith("root@") and "PUSH_RC" not in l
+        )
+        has_auth_err = pass_sent and any(err in bottom_text for err in [
+            "authentication failed",
+            "access denied",
+            "invalid username or password",
+            "fatal: authentication"
+        ])
+
+        if has_fail_marker or has_auth_err:
+            print("\n[GIT PUITY] 🚨 Authentication or git push failure detected!")
+            auth_failed = True
+            break
             time.sleep(2.0)
 
         time.sleep(1.0)
