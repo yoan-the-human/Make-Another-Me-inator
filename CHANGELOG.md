@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.3](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.2...v1.0.3) (2026-09-16)
+
+
+### 🐛 Bugs
+
+* now the claude input is fixed from wrong commands ([372c7e6](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/372c7e67ed147a6091a66e502ee2d0acfbf18c47))
+
 ### [1.0.2](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.1...v1.0.2) (2026-09-16)
 
 
