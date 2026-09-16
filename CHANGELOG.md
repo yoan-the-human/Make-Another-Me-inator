@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.2](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.1...v1.0.2) (2026-09-16)
+
+
+### 🐛 Bugs
+
+* fixed a bug where the script doesnt know what to do on passoword step ([1dedf17](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/1dedf1776ffe837080880197c27b10fee629e052))
+
 ### [1.0.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.0...v1.0.1) (2026-09-16)
 
 
