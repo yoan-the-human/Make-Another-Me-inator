@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.4](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.3...v1.0.4) (2026-09-16)
+
+
+### 🐛 Bugs
+
+* fixed a bug with claude prompt pasting ([2428422](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/2428422291d58f27a72cf49ba5869d6a6c9718b8))
+
 ### [1.0.3](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.2...v1.0.3) (2026-09-16)
 
 
