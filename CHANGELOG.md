@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.5](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.4...v1.0.5) (2026-09-16)
+
+
+### 🚀 New
+
+* new logging logic for tasks, that save the claude log ([a3d1fcd](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/a3d1fcd03c3ba414799526003b91d941b9fbd482))
+
 ### [1.0.4](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.3...v1.0.4) (2026-09-16)
 
 
