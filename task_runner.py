@@ -418,8 +418,19 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     if not completed:
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
+    # Save Claude's response snapshot to tasks/log/{task_name}_claude.txt before clearing!
+    log_file = config.LOG_DIR / f"{task_file.stem}_claude.txt"
+    try:
+        claude_screen = putty.capture_screen_text(claude_hwnd)
+        with open(log_file, "w", encoding="utf-8", errors="replace") as f:
+            f.write(claude_screen)
+        print(f"[LOG] 📝 Saved Claude's response snapshot to {log_file}")
+    except Exception as e:
+        print(f"[WARNING] Could not save Claude response log: {e}")
+
     # Step 6: In Git PuTTY, commit and push changes directly from /data/development
     handle_git_push(git_hwnd, branch_name, commit_msg, config.SERVER_REPO_DIR)
+
         
     # Note: Stay on branch! No worktree removal and no git checkout main.
     print(f"\n[GIT PUITY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR} (no cleanup or switch needed).")

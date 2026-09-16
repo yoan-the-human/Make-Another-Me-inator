@@ -17,9 +17,10 @@ RE_DIR = TASKS_DIR / "re"
 WORKING_DIR = TASKS_DIR / "working"
 COMPLETED_DIR = TASKS_DIR / "completed"
 ARCHIVE_DIR = TASKS_DIR / "archive"
+LOG_DIR = TASKS_DIR / "log"
 
 # Ensure all task directories exist
-for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
+for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR, LOG_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
 # Default Server repo root
