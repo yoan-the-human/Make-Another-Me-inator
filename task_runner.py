@@ -354,10 +354,43 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         )
 
     putty.paste_text(git_hwnd, git_cmd, press_enter=True)
-    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60)
+    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=120)
     if not ready:
-        print("[WARNING] Branch switch did not confirm via marker. Waiting extra 3s...")
-        time.sleep(3.0)
+        print(f"\n[GIT PUITY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
+        telegram_alert.send_git_auth_failed_alert(branch_name, config.SERVER_REPO_DIR)
+        print(f"Please switch to Git PuTTY, provide credentials or checkout branch '{branch_name}' manually.")
+        print("Script is waiting for confirmation that branch is checked out...")
+
+        last_rem = time.time()
+        while True:
+            screen = putty.capture_screen_text(git_hwnd)
+            lines = [l.strip() for l in screen.splitlines() if l.strip()]
+            recent_text = "\n".join(lines[-25:])
+
+            branch_ok = (
+                f"Switched to branch '{branch_name}'" in recent_text or
+                f"Switched to a new branch '{branch_name}'" in recent_text or
+                f"On branch {branch_name}" in recent_text or
+                any(
+                    (l == marker or l == f"'{marker}'" or l == f'"{marker}"')
+                    for l in lines[-25:]
+                    if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
+                )
+            )
+            if branch_ok:
+                print(f"[GIT PUITY] ✅ Branch '{branch_name}' confirmed active! Resuming pipeline...")
+                telegram_alert.send_git_push_confirmed_notification(branch_name)
+                time.sleep(1.0)
+                break
+
+            if time.time() - last_rem >= 120:
+                print(f"[GIT PUITY] ⏳ Still waiting for branch setup confirmation for '{branch_name}'...")
+                telegram_alert.send_telegram_message(
+                    f"⏳ *Reminder:* Pipeline is waiting for branch `{branch_name}` to be checked out in Git PuTTY!"
+                )
+                last_rem = time.time()
+
+            time.sleep(2.0)
 
     # Step 3: In Claude PuTTY, clear previous context
     # Claude is permanently in /data/development - no /cd hopping, no trust dialogs!
