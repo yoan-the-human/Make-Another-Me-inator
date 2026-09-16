@@ -310,9 +310,12 @@ def flash_window(hwnd: int):
         pass
 
 def send_enter(hwnd: int):
-    """Send Enter key directly to PuTTY window procedure via WM_CHAR 13 (\r)."""
-    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0)
-    time.sleep(0.1)
+    """Send Enter key directly to PuTTY window procedure with full keydown/char/keyup sequence."""
+    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0x001C0001)
+    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0x001C0001)
+    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0xC01C0001)
+    time.sleep(0.15)
+
 
 def send_down_arrow(hwnd: int):
     """Send Down Arrow key to PuTTY window procedure."""
@@ -397,13 +400,69 @@ def check_claude_usage(claude_hwnd: int, threshold: float = None) -> tuple[float
         return None, "", False
 
 
+def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
+    """
+    Safely execute /clear in Claude PuTTY and actively verify that it executes,
+    clearing previous context and waiting for a clean prompt ('❯ ').
+    Prevents prompt concatenation errors (e.g. '/clearcheck...').
+    """
+    print("\n[CLAUDE PUITY] 🧹 Clearing previous context (/clear)...")
+    activate_window(claude_hwnd)
+    time.sleep(0.2)
+
+    # If prompt line currently has unsubmitted characters, dismiss them first
+    screen = capture_screen_text(claude_hwnd)
+    lines = [l.strip() for l in screen.splitlines() if l.strip()]
+    prompt_line = next((l for l in reversed(lines) if "❯" in l), "")
+    clean_p = prompt_line.replace("\xa0", " ").strip()
+    if clean_p and clean_p != "❯":
+        print(f"[CLAUDE PUITY] Detected unsubmitted text on prompt: '{clean_p}'. Clearing line...")
+        send_escape(claude_hwnd)
+        time.sleep(0.2)
+
+    # Paste /clear and submit Enter
+    paste_text(claude_hwnd, "/clear", press_enter=True)
+    time.sleep(0.5)
+
+    start_time = time.time()
+    resend_count = 0
+    while time.time() - start_time < timeout:
+        screen = capture_screen_text(claude_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-15:]
+        prompt_line = next((l for l in reversed(recent_lines) if "❯" in l), "")
+        clean_prompt = prompt_line.replace("\xa0", " ").strip()
+
+        # If /clear is still sitting unsubmitted on prompt line, resend Enter
+        if "/clear" in clean_prompt:
+            resend_count += 1
+            if resend_count <= 3:
+                print(f"[CLAUDE PUITY] ⏳ /clear still on prompt line ('{clean_prompt}'). Resending Enter...")
+                activate_window(claude_hwnd)
+                send_enter(claude_hwnd)
+                time.sleep(0.8)
+                continue
+
+        # If prompt is cleanly reset to '❯' without /clear
+        if clean_prompt == "❯":
+            print("[CLAUDE PUITY] ✅ Context successfully cleared! Clean prompt '❯' confirmed.")
+            time.sleep(0.5)
+            return True
+
+        time.sleep(0.5)
+
+    print("[CLAUDE PUITY] ⚠️ Timed out waiting for clean prompt after /clear, proceeding with caution.")
+    return False
+
+
 def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool = True):
     """
     Set clipboard, right-click paste into PuTTY, wait for terminal to register, and send Enter.
     """
+    activate_window(hwnd)
     clean_text = text.rstrip("\r\n")
     set_clipboard(clean_text)
-    time.sleep(0.1)
+    time.sleep(0.15)
     
     rect = win32gui.GetClientRect(hwnd)
     cx = max(10, (rect[2] - rect[0]) // 2)
@@ -420,6 +479,7 @@ def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool =
     
     if press_enter:
         send_enter(hwnd)
+
 
 def get_window_title(hwnd: int) -> str:
     try:

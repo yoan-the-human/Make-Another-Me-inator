@@ -399,9 +399,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
     # Step 3: In Claude PuTTY, clear previous context
     # Claude is permanently in /data/development - no /cd hopping, no trust dialogs!
-    print("\n[CLAUDE PUITY] 2. Clearing previous context (/clear)...")
-    putty.paste_text(claude_hwnd, "/clear", press_enter=True)
-    time.sleep(1.5)
+    putty.clear_claude_context(claude_hwnd)
 
     # Step 4: In Claude PuTTY, send the prompt
     print("\n[CLAUDE PUITY] 3. Sending task prompt to Claude...")
@@ -430,8 +428,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
     # Step 9: Clear Claude's context after task completion
     print("[CLAUDE PUITY] 5. Sending /clear to wipe memory for next assignment...")
-    putty.paste_text(claude_hwnd, "/clear", press_enter=True)
-    time.sleep(1.5)
+    putty.clear_claude_context(claude_hwnd)
 
     if is_over_limit:
         telegram_alert.send_quota_alert(usage_pct, reset_time)
