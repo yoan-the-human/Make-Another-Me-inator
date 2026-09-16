@@ -222,6 +222,7 @@ class LogWatcher:
 
         start_time = time.time()
         in_question_mode = False
+        has_started = False
 
         print(f"[CLAUDE MONITOR] Watching Claude output (checking every {poll_interval}s; your clipboard is safe)...")
 
@@ -233,6 +234,7 @@ class LogWatcher:
                 print(f"\n[CLAUDE MONITOR] ❓ Claude asked a question/choice immediately! Alerting Telegram...")
                 telegram_alert.send_question_alert(q_details)
                 in_question_mode = True
+                has_started = True
 
         while time.time() - start_time < max_timeout:
             if not claude_hwnd:
@@ -249,6 +251,9 @@ class LogWatcher:
             is_busy = any("esc to interrupt" in l.lower() for l in bottom_lines)
             is_asking, q_details = detect_claude_question_or_choice(curr_screen)
 
+            if is_busy or any(l.startswith("●") for l in bottom_lines) or is_asking:
+                has_started = True
+
             # 1. Did the user just answer a question Claude was waiting on?
             if in_question_mode:
                 if not is_asking or is_busy:
@@ -260,9 +265,13 @@ class LogWatcher:
             has_done = any("· done" in l.lower() for l in bottom_lines)
             has_prompt = any(l.startswith("❯") or l == "❯" for l in bottom_lines)
 
-            if not is_busy and (has_done or (has_prompt and not is_asking)):
+            if not is_busy and (has_done or (has_started and has_prompt and not is_asking)):
                 print(f"\n[CLAUDE MONITOR] ✅ Claude has genuinely completed the task! (Prompt returned)")
                 return True
+
+            if not has_started and (time.time() - start_time > 25):
+                print("[CLAUDE MONITOR] ⚠️ Claude has not engaged with prompt after 25s (still idle). Resending may be needed.")
+
 
             # 3. Is Claude asking an interactive question or waiting for user choice/permission?
             if is_asking and not is_busy and not has_done:

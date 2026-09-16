@@ -74,17 +74,19 @@ SCAN_RETURN = 0x1C
 SCAN_DOWN = 0x50
 
 def set_clipboard(text: str) -> bool:
-    """Set text to Windows clipboard with retry mechanism."""
-    for _ in range(5):
+    """Set text to Windows clipboard with retry mechanism and verification."""
+    for _ in range(10):
         try:
             win32clipboard.OpenClipboard()
             win32clipboard.EmptyClipboard()
             win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
             win32clipboard.CloseClipboard()
-            return True
+            if get_clipboard() == text:
+                return True
         except Exception:
             time.sleep(0.1)
     return False
+
 
 def get_clipboard() -> str:
     """Get text from Windows clipboard."""
@@ -310,11 +312,10 @@ def flash_window(hwnd: int):
         pass
 
 def send_enter(hwnd: int):
-    """Send Enter key directly to PuTTY window procedure with full keydown/char/keyup sequence."""
-    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0x001C0001)
-    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0x001C0001)
-    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0xC01C0001)
+    """Send Enter key directly to PuTTY window procedure via WM_CHAR 13 (\r)."""
+    win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0)
     time.sleep(0.15)
+
 
 
 def send_down_arrow(hwnd: int):
@@ -446,7 +447,7 @@ def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
         # If prompt is cleanly reset to '❯' without /clear
         if clean_prompt == "❯":
             print("[CLAUDE PUITY] ✅ Context successfully cleared! Clean prompt '❯' confirmed.")
-            time.sleep(0.5)
+            time.sleep(1.0)
             return True
 
         time.sleep(0.5)
@@ -459,9 +460,10 @@ def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool =
     """
     Set clipboard, right-click paste into PuTTY, wait for terminal to register, and send Enter.
     """
-    activate_window(hwnd)
     clean_text = text.rstrip("\r\n")
-    set_clipboard(clean_text)
+    if not set_clipboard(clean_text):
+        print(f"[ERROR] Failed to set clipboard with text ({len(clean_text)} chars)!")
+        return False
     time.sleep(0.15)
     
     rect = win32gui.GetClientRect(hwnd)
@@ -474,11 +476,14 @@ def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool =
     time.sleep(0.05)
     win32gui.SendMessage(hwnd, win32con.WM_RBUTTONUP, 0, lp)
     
-    # Wait for terminal to process clipboard text
-    time.sleep(0.35)
+    # Wait for terminal to process clipboard text (allow extra time for long prompts)
+    settle = max(0.4, min(1.5, len(clean_text) * 0.0015))
+    time.sleep(settle)
     
     if press_enter:
         send_enter(hwnd)
+    return True
+
 
 
 def get_window_title(hwnd: int) -> str:

@@ -403,8 +403,14 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
     # Step 4: In Claude PuTTY, send the prompt
     print("\n[CLAUDE PUITY] 3. Sending task prompt to Claude...")
+    time.sleep(1.0)
     watcher.mark_start()
-    putty.paste_text(claude_hwnd, prompt, press_enter=True)
+    pasted = putty.paste_text(claude_hwnd, prompt, press_enter=True)
+    if not pasted:
+        print("[WARNING] Initial prompt paste failed! Retrying...")
+        time.sleep(1.0)
+        putty.paste_text(claude_hwnd, prompt, press_enter=True)
+
     
     # Step 5: Wait for Claude completion
     print("[CLAUDE PUITY] Waiting for Claude to finish working on task...")
