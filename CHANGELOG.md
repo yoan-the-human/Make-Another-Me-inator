@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.0.6](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.5...v1.0.6) (2026-09-17)
+
+
+### 🐛 Bugs
+
+* fix a bug where the push doesnt occur ([b2eddc7](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/b2eddc7d67b50c27a0f904fcefebe83757f22381))
+
 ### [1.0.5](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.4...v1.0.5) (2026-09-16)
 
 
