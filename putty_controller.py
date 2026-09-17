@@ -312,7 +312,7 @@ def flash_window(hwnd: int):
         pass
 
 def send_enter(hwnd: int):
-    """Send Enter key directly to PuTTY window procedure via WM_CHAR 13 (\r)."""
+    """Send a single Enter key to PuTTY via WM_CHAR 13 (\r)."""
     win32gui.PostMessage(hwnd, win32con.WM_CHAR, 13, 0)
     time.sleep(0.15)
 
@@ -458,28 +458,31 @@ def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
 
 def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool = True):
     """
-    Set clipboard, right-click paste into PuTTY, wait for terminal to register, and send Enter.
+    Bring target window to foreground, set clipboard, right-click paste into PuTTY,
+    wait for terminal to register, and send Enter.
     """
+    activate_window(hwnd)
+    time.sleep(0.15)
+
     clean_text = text.rstrip("\r\n")
     if not set_clipboard(clean_text):
         print(f"[ERROR] Failed to set clipboard with text ({len(clean_text)} chars)!")
         return False
     time.sleep(0.15)
-    
+
     rect = win32gui.GetClientRect(hwnd)
     cx = max(10, (rect[2] - rect[0]) // 2)
     cy = max(10, (rect[3] - rect[1]) // 2)
     lp = (cy << 16) | (cx & 0xFFFF)
-    
+
     # Native PuTTY right-click paste
     win32gui.SendMessage(hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, lp)
     time.sleep(0.05)
     win32gui.SendMessage(hwnd, win32con.WM_RBUTTONUP, 0, lp)
-    
-    # Wait for terminal to process clipboard text (allow extra time for long prompts)
+
     settle = max(0.4, min(1.5, len(clean_text) * 0.0015))
     time.sleep(settle)
-    
+
     if press_enter:
         send_enter(hwnd)
     return True
