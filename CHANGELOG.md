@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.1.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.0...v1.1.1) (2026-09-18)
+
+
+### 📚 Documentation
+
+* readme update ([edab78f](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/edab78f0c77eb863285c3230067c4f51b2de9eb9))
+
 ## [1.1.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.6...v1.1.0) (2026-09-18)
 
 
