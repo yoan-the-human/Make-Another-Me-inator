@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.6...v1.1.0) (2026-09-18)
+
+
+### 🚀 New
+
+* 2 new telegram commands for updating production after merge and to exit process from telegram ([201a859](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/201a859377a1181ab6167fd91e0afd3023060c7f))
+
 ### [1.0.6](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.0.5...v1.0.6) (2026-09-17)
 
 
