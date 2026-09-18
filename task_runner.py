@@ -231,13 +231,14 @@ def handle_reproduction(git_hwnd: int) -> bool:
     putty.paste_text(git_hwnd, repro_cmd, press_enter=True)
 
     start_time = time.time()
-    last_prompt_fill_time = 0
+    username_submitted = False
+    password_submitted = False
 
     while time.time() - start_time < 240:
         screen = putty.capture_screen_text(git_hwnd)
         lines = [l.strip() for l in screen.splitlines() if l.strip()]
         recent_lines = lines[-25:]
-        bottom_3 = lines[-3:] if len(lines) >= 3 else lines
+        last_line = lines[-1].lower() if lines else ""
 
         # 1. Check success marker
         has_ok = any(
@@ -259,34 +260,33 @@ def handle_reproduction(git_hwnd: int) -> bool:
             print("[REPRODUCTION] ❌ Reproduction command failed with non-zero exit code!")
             return False
 
-        now = time.time()
-        # Ensure at least 1.5s delay between entering credentials to prevent double submission
-        if now - last_prompt_fill_time > 1.5:
-            # Check for unanswered Username prompt (line ends with colon, e.g. "Username for '...':")
-            is_user_prompt = any(
-                ("username for" in l.lower() and l.endswith(":"))
-                for l in bottom_3
-            )
-            if is_user_prompt:
-                print("[REPRODUCTION] 🔑 Detected Username prompt! Submitting username...")
-                putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
-                last_prompt_fill_time = time.time()
-                time.sleep(1.0)
-                continue
+        # 3. Check active prompts on the last visible line
+        is_user_prompt = ("username for" in last_line and last_line.endswith(":"))
+        is_pass_prompt = ("password for" in last_line and last_line.endswith(":"))
 
-            # Check for unanswered Password prompt (line ends with colon, e.g. "Password for '...':")
-            is_pass_prompt = any(
-                ("password for" in l.lower() and l.endswith(":"))
-                for l in bottom_3
-            )
-            if is_pass_prompt:
-                print("[REPRODUCTION] 🔒 Detected Password prompt! Submitting password...")
-                putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
-                last_prompt_fill_time = time.time()
-                time.sleep(2.0)
-                continue
+        # Reset submission flags once Git has processed credentials and moved past the prompt
+        if not is_user_prompt:
+            username_submitted = False
+        if not is_pass_prompt:
+            password_submitted = False
 
-        time.sleep(1.0)
+        # Submit username if active and not already submitted for this prompt
+        if is_user_prompt and not username_submitted:
+            print("[REPRODUCTION] 🔑 Detected Username prompt! Submitting username...")
+            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
+            username_submitted = True
+            time.sleep(1.0)
+            continue
+
+        # Submit password if active and not already submitted for this prompt
+        if is_pass_prompt and not password_submitted:
+            print("[REPRODUCTION] 🔒 Detected Password prompt! Submitting password...")
+            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+            password_submitted = True
+            time.sleep(1.5)
+            continue
+
+        time.sleep(0.5)
 
     print("[REPRODUCTION] ⚠️ Reproduction command timed out after 240 seconds!")
     return False
