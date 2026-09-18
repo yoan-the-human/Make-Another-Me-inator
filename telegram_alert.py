@@ -12,6 +12,8 @@ if sys.platform == "win32":
 
 import config
 
+_last_update_id = 0
+
 def send_telegram_message(text: str) -> bool:
     """Send message to Telegram via Bot API."""
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
@@ -43,10 +45,62 @@ def send_telegram_message(text: str) -> bool:
         print(f"[TELEGRAM] Connection error: {e}")
         return False
 
+def init_telegram_listener():
+    """Discard all past unread messages on startup so old commands aren't executed."""
+    global _last_update_id
+    if not config.TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getUpdates"
+    try:
+        res = requests.get(url, params={"offset": -1, "timeout": 0}, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            results = data.get("result", [])
+            if results:
+                _last_update_id = results[-1]["update_id"]
+                print(f"[TELEGRAM] Initialized command listener (last update id: {_last_update_id})")
+    except Exception as e:
+        print(f"[TELEGRAM] Warning during listener init: {e}")
+
+def check_telegram_commands() -> list[str]:
+    """
+    Poll Telegram getUpdates for new messages from the authorized user chat.
+    Returns a list of normalized command strings (e.g. 'reproduction', 'takeabreak').
+    """
+    global _last_update_id
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return []
+
+    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/getUpdates"
+    params = {"offset": _last_update_id + 1, "timeout": 0}
+    
+    commands = []
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            data = res.json()
+            for update in data.get("result", []):
+                _last_update_id = update["update_id"]
+                msg = update.get("message") or update.get("channel_post")
+                if not msg:
+                    continue
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                if chat_id != str(config.TELEGRAM_CHAT_ID):
+                    continue
+                
+                raw_text = msg.get("text", "").strip()
+                if not raw_text:
+                    continue
+
+                # Normalize command: remove leading slash, bot tag, spaces, and make lowercase
+                cmd = raw_text.split("@")[0].lstrip("/").strip().lower().replace(" ", "")
+                commands.append(cmd)
+    except Exception:
+        pass
+    return commands
+
 def send_quota_alert(usage_pct: float, reset_time: str = "") -> bool:
-    """
-    Alert user via Telegram that Claude session quota reached or exceeded threshold.
-    """
+    """Alert user via Telegram that Claude session quota reached or exceeded threshold."""
     msg = f"⚠️ *Vnimaniye, Comrade Yoan!*\n\nClaude session usage has reached *{usage_pct:.1f}%* (threshold is {config.USAGE_THRESHOLD:.0f}%)!"
     if reset_time:
         msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
@@ -54,9 +108,7 @@ def send_quota_alert(usage_pct: float, reset_time: str = "") -> bool:
     return send_telegram_message(msg)
 
 def send_question_alert(question_text: str) -> bool:
-    """
-    Alert user via Telegram that Claude is asking a question or waiting for user choice.
-    """
+    """Alert user via Telegram that Claude is asking a question or waiting for user choice."""
     preview = question_text.strip() if question_text else "Claude is asking you to pick an option or give permission."
     if len(preview) > 800:
         preview = preview[:800] + "..."
@@ -71,16 +123,12 @@ def send_question_alert(question_text: str) -> bool:
     return send_telegram_message(msg)
 
 def send_answered_notification() -> bool:
-    """
-    Notify user that answer was detected in PuTTY and Claude resumed work.
-    """
+    """Notify user that answer was detected in PuTTY and Claude resumed work."""
     msg = "🚀 *Orders received!* Detected your answer to Claude in PuTTY. Task execution resumed! ☭"
     return send_telegram_message(msg)
 
 def send_git_auth_failed_alert(branch_name: str, worktree_dir: str) -> bool:
-    """
-    Alert user via Telegram that git push authentication failed and pipeline is halted.
-    """
+    """Alert user via Telegram that git push authentication failed and pipeline is halted."""
     msg = (
         f"🚨 *Vnimaniye, Comrade Yoan! Git Push Failed!*\n\n"
         f"Authentication failed while pushing branch `{branch_name}` in worktree `{worktree_dir}`!\n\n"
@@ -90,23 +138,22 @@ def send_git_auth_failed_alert(branch_name: str, worktree_dir: str) -> bool:
     return send_telegram_message(msg)
 
 def send_git_push_confirmed_notification(branch_name: str) -> bool:
-    """
-    Notify user that git push confirmation was detected and pipeline resumed.
-    """
+    """Notify user that git push confirmation was detected and pipeline resumed."""
     msg = f"✅ *Spasibo, Comrade Yoan!* Git push confirmed for `{branch_name}`! Resuming pipeline! 🚀☭"
     return send_telegram_message(msg)
 
-def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
+def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None, git_hwnd: int = None, reproduction_handler=None):
     """
     Called when re, pending, and working folders are empty.
-    If merged folder has files (deferred because active branch), rests for interval_seconds
-    without spamming, or resumes immediately if new tasks appear.
+    - Polls for user Telegram commands ('reproduction', 'takeabreak') every second.
+    - If 'takeabreak' is received: raises KeyboardInterrupt for safe exit.
+    - If 'reproduction' is received: executes reproduction routine in Git PuTTY and resets the 2-minute timer.
+    - Resumes immediately if new task files appear.
     """
     re_files = list(config.RE_DIR.glob("*.txt"))
     pending_files = list(config.PENDING_DIR.glob("*.txt"))
     working_files = list(config.WORKING_DIR.glob("*.txt"))
     
-    # If actionable tasks exist in re, pending, or working, resume immediately
     if re_files or pending_files or working_files:
         return True
 
@@ -122,7 +169,31 @@ def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
     while True:
         if stop_event and stop_event.is_set():
             return False
-            
+
+        # --- Check for Telegram commands from user ---
+        cmds = check_telegram_commands()
+        for cmd in cmds:
+            if cmd in ["takeabreak", "break", "stop", "exit"]:
+                print(f"\n[TELEGRAM] 🛑 Command '{cmd}' received! Shutting down pipeline cleanly...")
+                send_telegram_message("🛑 *Comrade Yoan! Order 'takeabreak' received!*\nExiting automation pipeline cleanly. Samovar is cooling down, tovarisch! 🪆🐻")
+                raise KeyboardInterrupt("Telegram command 'takeabreak' received.")
+
+            elif cmd == "reproduction":
+                # 1. RESET TIMER IMMEDIATELY ON RECEIPT
+                elapsed = 0
+                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received! Preparing to execute...")
+                send_telegram_message("🔄 *Orders received!* Executing reproduction command in Git PuTTY:\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
+                if git_hwnd and reproduction_handler:
+                    success = reproduction_handler(git_hwnd)
+                    if success:
+                        send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
+                    else:
+                        send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                else:
+                    print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
+
+                print(f"✅ Reproduction finished.")
+
         # Check if new files appeared in re, pending, working, or a NEW file in merged
         curr_re = list(config.RE_DIR.glob("*.txt"))
         curr_pending = list(config.PENDING_DIR.glob("*.txt"))
@@ -148,8 +219,6 @@ def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None):
         
         if elapsed >= interval_seconds:
             if initial_merged_names:
-                # 2-minute rest completed while waiting on active merged branch.
-                # Re-check to see if active branch changed.
                 print(f"[QUEUE] {interval_seconds}s rest completed. Re-checking merged queue...")
                 return True
             else:

@@ -20,7 +20,7 @@ import telegram_alert
 def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
     """
     Parse a task text file.
-    Line 1: Git branch command or branch name (e.g. "new/catalog-videos" or new/catalog-videos or git checkout -b ...)
+    Line 1: Git branch command or branch name (e.g. "new/catalog-videos" or git checkout -b ...)
     Line 2: Commit message
     Line 3+: Prompt for Claude
     """
@@ -45,7 +45,6 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
         elif "re" in file_path.parent.name.lower():
             is_new = False
         else:
-            # If in working folder or root, check if line1 starts with new/ or feat/
             is_new = any(line1.lower().startswith(p) for p in ["new/", "feat/", "feature/"])
 
     # Extract branch name
@@ -53,7 +52,6 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
     if branch_match:
         branch_name = branch_match.group(1).strip()
     elif "git worktree add" in line1:
-        # Legacy worktree format without -b: git worktree add <dir> <branch>
         m = re.search(r'git\s+worktree\s+add\s+[^\s]+\s+([^\s]+)', line1)
         if m:
             branch_name = m.group(1).strip()
@@ -61,16 +59,13 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
             m2 = re.search(r'git\s+worktree\s+add\s+([^\s]+)', line1)
             branch_name = Path(m2.group(1)).name.replace("task-", "") if m2 else file_path.stem
     elif line1.startswith("git checkout") or line1.startswith("git switch"):
-        # e.g. git checkout <branch> or git switch <branch>
         tokens = line1.split()
         branch_tokens = [t for t in tokens[2:] if not t.startswith("-")]
         branch_name = branch_tokens[0] if branch_tokens else file_path.stem
     else:
-        # Bare line or unrecognized prefix, e.g. "new/catalog-videos-something"
         tokens = line1.split()
         branch_name = tokens[0] if tokens else file_path.stem
 
-    # Strip punctuation/quotes
     branch_name = branch_name.strip("'\";&")
 
     return {
@@ -82,11 +77,7 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
     }
 
 def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: str = config.SERVER_REPO_DIR) -> bool:
-    """
-    Execute git add, commit, and push directly in repo_dir (/data/development).
-    - Dynamically detects Git's Username and Password prompts.
-    - Fills credentials from .env and presses Enter cleanly.
-    """
+    """Execute git add, commit, and push directly in repo_dir (/data/development)."""
     push_uid = f"{int(time.time())}_{os.getpid()}"
     push_ok_marker = f"==PUSH_OK_{push_uid}=="
     push_fail_marker = f"==PUSH_FAIL_{push_uid}=="
@@ -108,7 +99,6 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
     start_push = time.time()
     user_sent = False
     pass_sent = False
-    auth_failed = False
 
     while time.time() - start_push < 180:
         screen = putty.capture_screen_text(git_hwnd)
@@ -141,10 +131,9 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
             ])
             if has_fail_marker or has_auth_err:
                 print("\n[GIT PUITY] 🚨 Authentication failed after submitting credentials!")
-                auth_failed = True
                 break
 
-        # 3. Handle Username prompt (when active at prompt)
+        # 3. Handle Username prompt
         if not user_sent and any("username for" in l.lower() for l in lines[-3:]):
             print("[GIT PUITY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
@@ -153,9 +142,8 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
             time.sleep(1.5)
             continue
 
-        # 4. Handle Password prompt (when active at prompt)
+        # 4. Handle Password prompt
         if user_sent and not pass_sent and any("password for" in l.lower() for l in lines[-3:]):
-            # Ensure it's not back at a bash shell
             if not last_line.endswith("#") and not last_line.endswith("$"):
                 print("[GIT PUITY] Detected Password prompt! Entering password...")
                 time.sleep(0.5)
@@ -221,14 +209,90 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
 
         time.sleep(2.0)
 
+def handle_reproduction(git_hwnd: int) -> bool:
+    """
+    Executes 'git fetch origin main && git -C ../haskovo.net pull origin main' in Git PuTTY.
+    Dynamically listens and fills username and password prompts (which may occur multiple times).
+    """
+    uid = f"{int(time.time() * 1000)}_{os.getpid()}"
+    ok_marker = f"==REPRO_OK_{uid}=="
+    fail_marker = f"==REPRO_FAIL_{uid}=="
+
+    repro_cmd = (
+        f"cd {config.SERVER_REPO_DIR} && "
+        f"git fetch origin main && git -C ../haskovo.net pull origin main ; "
+        f"REPRO_RC=$? ; "
+        f"if [ $REPRO_RC -eq 0 ]; then echo '{ok_marker}' ; else echo '{fail_marker}' ; fi"
+    )
+
+    print(f"\n[REPRODUCTION] 🚀 Pasting reproduction command into Git PuTTY...")
+    putty.activate_window(git_hwnd)
+    time.sleep(0.3)
+    putty.paste_text(git_hwnd, repro_cmd, press_enter=True)
+
+    start_time = time.time()
+    last_prompt_fill_time = 0
+
+    while time.time() - start_time < 240:
+        screen = putty.capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-25:]
+        bottom_3 = lines[-3:] if len(lines) >= 3 else lines
+
+        # 1. Check success marker
+        has_ok = any(
+            (l == ok_marker or l == f"'{ok_marker}'" or l == f'"{ok_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and "REPRO_RC" not in l and not l.startswith("root@")
+        )
+        if has_ok:
+            print("[REPRODUCTION] ✅ Reproduction command completed successfully!")
+            return True
+
+        # 2. Check failure marker
+        has_fail = any(
+            (l == fail_marker or l == f"'{fail_marker}'" or l == f'"{fail_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and "REPRO_RC" not in l and not l.startswith("root@")
+        )
+        if has_fail:
+            print("[REPRODUCTION] ❌ Reproduction command failed with non-zero exit code!")
+            return False
+
+        now = time.time()
+        # Ensure at least 1.5s delay between entering credentials to prevent double submission
+        if now - last_prompt_fill_time > 1.5:
+            # Check for unanswered Username prompt (line ends with colon, e.g. "Username for '...':")
+            is_user_prompt = any(
+                ("username for" in l.lower() and l.endswith(":"))
+                for l in bottom_3
+            )
+            if is_user_prompt:
+                print("[REPRODUCTION] 🔑 Detected Username prompt! Submitting username...")
+                putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
+                last_prompt_fill_time = time.time()
+                time.sleep(1.0)
+                continue
+
+            # Check for unanswered Password prompt (line ends with colon, e.g. "Password for '...':")
+            is_pass_prompt = any(
+                ("password for" in l.lower() and l.endswith(":"))
+                for l in bottom_3
+            )
+            if is_pass_prompt:
+                print("[REPRODUCTION] 🔒 Detected Password prompt! Submitting password...")
+                putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+                last_prompt_fill_time = time.time()
+                time.sleep(2.0)
+                continue
+
+        time.sleep(1.0)
+
+    print("[REPRODUCTION] ⚠️ Reproduction command timed out after 240 seconds!")
+    return False
+
 def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
-    """
-    Process a file in tasks/merged/:
-    1. Read Line 1 to extract branch_name.
-    2. In Git PuTTY, check if /data/development is currently on that branch.
-    3. If yes: do nothing, leave file in tasks/merged/.
-    4. If not: execute 'git branch -d {branch_name}', archive file to tasks/archive/.
-    """
+    """Process a file in tasks/merged/: delete branch if not active, archive task."""
     task_name = task_file.name
     try:
         task_info = parse_task_file(task_file, is_new_branch=False)
@@ -290,16 +354,7 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
     return False
 
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
-    """
-    Execute full workflow for a single task directly in /data/development:
-    1. Move pending/re -> working
-    2. Git branch switch/creation (new branch off origin/main, or existing branch)
-    3. Claude /clear, paste prompt, wait completion
-    4. Git commit & push with credentials handling
-    5. Stay on branch (no cleanup, no switch to main)
-    6. Move working -> completed
-    7. Usage check & /clear
-    """
+    """Execute full workflow for a single task directly in /data/development."""
     task_name = task_file.name
     origin_parent = task_file.parent.name.lower()
     is_from_pending = (origin_parent == "pending")
@@ -313,7 +368,6 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     shutil.move(str(task_file), str(working_file))
     print(f"[TASK] Moved to {working_file}")
     
-    # Parse file
     try:
         task_info = parse_task_file(working_file, is_new_branch=is_from_pending)
     except Exception as e:
@@ -322,7 +376,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         
     branch_name = task_info["branch_name"]
     is_new = task_info["is_new_branch"]
-    commit_msg = task_info["commit_message"].replace('"', '\\"') # escape quotes for bash
+    commit_msg = task_info["commit_message"].replace('"', '\\"')
     prompt = task_info["prompt"]
     
     print(f"  -> Repository:    {config.SERVER_REPO_DIR}")
@@ -330,7 +384,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     print(f"  -> Commit Msg:    {commit_msg}")
     print(f"  -> Prompt length: {len(prompt)} chars")
 
-    # Step 2: In Git PuTTY, switch or create branch in /data/development
+    # Step 2: Switch or create branch in /data/development
     marker = f"==BRANCH_READY_{int(time.time() * 1000)}=="
     if is_new:
         print(f"\n[GIT PUITY] 1. Fetching origin main and checking out new branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
@@ -354,7 +408,6 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         print(f"\n[GIT PUITY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
         telegram_alert.send_git_auth_failed_alert(branch_name, config.SERVER_REPO_DIR)
         print(f"Please switch to Git PuTTY, provide credentials or checkout branch '{branch_name}' manually.")
-        print("Script is waiting for confirmation that branch is checked out...")
 
         last_rem = time.time()
         while True:
@@ -387,11 +440,10 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
             time.sleep(2.0)
 
-    # Step 3: In Claude PuTTY, clear previous context
-    # Claude is permanently in /data/development - no /cd hopping, no trust dialogs!
+    # Step 3: Clear Claude context
     putty.clear_claude_context(claude_hwnd)
 
-    # Step 4: In Claude PuTTY, send the prompt
+    # Step 4: Send Claude prompt
     print("\n[CLAUDE PUITY] 3. Sending task prompt to Claude...")
     time.sleep(1.0)
     watcher.mark_start()
@@ -401,14 +453,13 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         time.sleep(1.0)
         putty.paste_text(claude_hwnd, prompt, press_enter=True)
 
-    
-    # Step 5: Wait for Claude completion
+    # Step 5: Wait for completion
     print("[CLAUDE PUITY] Waiting for Claude to finish working on task...")
     completed = watcher.wait_for_claude_completion(claude_hwnd=claude_hwnd, idle_seconds=8, max_timeout=2400)
     if not completed:
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
-    # Save Claude's response snapshot to tasks/log/{task_name}_claude.txt before clearing!
+    # Save log snapshot
     log_file = config.LOG_DIR / f"{task_file.stem}_claude.txt"
     try:
         claude_screen = putty.capture_screen_text(claude_hwnd)
@@ -418,22 +469,19 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     except Exception as e:
         print(f"[WARNING] Could not save Claude response log: {e}")
 
-    # Step 6: In Git PuTTY, commit and push changes directly from /data/development
+    # Step 6: Commit and push
     handle_git_push(git_hwnd, branch_name, commit_msg, config.SERVER_REPO_DIR)
+    print(f"\n[GIT PUITY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR}.")
 
-        
-    # Note: Stay on branch! No worktree removal and no git checkout main.
-    print(f"\n[GIT PUITY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR} (no cleanup or switch needed).")
-
-    # Step 7: Move file to completed folder
+    # Step 7: Move to completed
     completed_file = config.COMPLETED_DIR / task_name
     shutil.move(str(working_file), str(completed_file))
     print(f"\n[SUCCESS] ✅ Task '{task_name}' completed and archived to {completed_file}!\n")
 
-    # Step 8: Check Claude session usage
+    # Step 8: Usage check
     usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
 
-    # Step 9: Clear Claude's context after task completion
+    # Step 9: Clear Claude context
     print("[CLAUDE PUITY] 5. Sending /clear to wipe memory for next assignment...")
     putty.clear_claude_context(claude_hwnd)
 
@@ -452,15 +500,13 @@ class QuotaLimitExceeded(Exception):
 def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     """
     Continuous worker loop:
-    - High priority: Processes all tasks in re/ folder first!
-    - Second priority: Processes tasks in pending/ folder only once re/ is empty.
-    - Priority 0: Checks merged/ folder first to delete merged branches!
-    - High priority: Processes all tasks in re/ folder first!
-    - Second priority: Processes tasks in pending/ folder only once re/ is empty.
-    - Recovers orphaned tasks in working/ back to their appropriate folder (re/ or pending/).
-    - ONLY engages Telegram alert when all task folders are completely empty!
-    - Automatically resumes when new tasks appear.
+    - Cleans up merged/ folder.
+    - Processes re/ then pending/.
+    - Recovers orphaned tasks in working/.
+    - When idle, monitors Telegram for 'reproduction' and 'takeabreak' commands.
     """
+    telegram_alert.init_telegram_listener()
+
     while True:
         # Priority 0: Clean up merged branches first!
         merged_files = sorted(list(config.MERGED_DIR.glob("*.txt")))
@@ -473,7 +519,7 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
         working_files = sorted(list(config.WORKING_DIR.glob("*.txt")))
         
-        # If there are orphaned tasks in working/ (e.g. from crash or previous run), recover them
+        # Recover orphaned tasks in working/
         if working_files and not re_files and not pending_files:
             for orphan in working_files:
                 is_re = False
@@ -514,7 +560,6 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
                 break
             except Exception as e:
                 print(f"[ERROR] Exception during task execution: {e}")
-                # If file got stuck in working folder, move it back to its origin folder
                 working_target = config.WORKING_DIR / task_file.name
                 if working_target.exists():
                     fallback_dir = origin_dir if origin_dir else config.PENDING_DIR
@@ -524,8 +569,12 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
                     shutil.move(str(working_target), str(target))
                 time.sleep(3)
         else:
-            # BOTH re, pending, and working are completely empty!
-            has_new = telegram_alert.wait_for_new_task_or_alert(interval_seconds=120)
+            # BOTH re, pending, and working are completely empty: enter idle monitor
+            has_new = telegram_alert.wait_for_new_task_or_alert(
+                interval_seconds=120,
+                git_hwnd=git_hwnd,
+                reproduction_handler=handle_reproduction
+            )
             if not has_new:
                 break
 
