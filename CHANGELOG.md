@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [1.1.2](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.1...v1.1.2) (2026-09-18)
+
+
+### 🐛 Bugs
+
+* fix a bug where the reproduction command didnt work ([12f17e4](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/12f17e4d986570920f72a38297a52619efb6e61d))
+
 ### [1.1.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.0...v1.1.1) (2026-09-18)
 
 
