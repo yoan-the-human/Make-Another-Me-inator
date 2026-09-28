@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.2...v1.2.0) (2026-09-28)
+
+
+### 🚀 New
+
+* no more logging, just renaming sessions for later ([e49a59d](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/e49a59dd183747be0b7ceeaf14220b59af709f32))
+
 ### [1.1.2](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.1...v1.1.2) (2026-09-18)
 
 
