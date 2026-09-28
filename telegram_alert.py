@@ -142,7 +142,7 @@ def send_git_push_confirmed_notification(branch_name: str) -> bool:
     msg = f"✅ *Spasibo, Comrade Yoan!* Git push confirmed for `{branch_name}`! Resuming pipeline! 🚀☭"
     return send_telegram_message(msg)
 
-def wait_for_new_task_or_alert(interval_seconds=120, stop_event=None, git_hwnd: int = None, reproduction_handler=None):
+def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None):
     """
     Called when re, pending, and working folders are empty.
     - Polls for user Telegram commands ('reproduction', 'takeabreak') every second.

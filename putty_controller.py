@@ -185,7 +185,7 @@ def capture_screen_text(hwnd: int) -> str:
                 pass
     return result
 
-def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_interval: float = 1.0) -> bool:
+def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 60, poll_interval: float = 1.0) -> bool:
     """
     Wait until ANY of the specified patterns appear on the PuTTY window screen as output.
     Returns True when found, False on timeout.
@@ -203,7 +203,7 @@ def wait_for_screen_text(hwnd: int, patterns: list, timeout: int = 120, poll_int
         time.sleep(poll_interval)
     return False
 
-def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120, marker: str = None) -> bool:
+def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 60, marker: str = None) -> bool:
     """
     Waits for git worktree checkout (e.g. 43,000 files) to reach 100% and return to shell prompt.
     Does NOT trigger on the pasted command line!
@@ -224,14 +224,14 @@ def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120, mark
             m = re.search(r'Updating files:\s+(\d+%)', line)
             if m and m.group(1) != last_pct:
                 last_pct = m.group(1)
-                print(f"[GIT PUITY] Unpacking files: {last_pct}...", flush=True)
+                print(f"[GIT PUTTY] Unpacking files: {last_pct}...", flush=True)
                 
         # The marker MUST appear as its own isolated line from echo, NOT the command line
         has_marker_line = any((l == marker or l == f"'{marker}'") for l in recent_lines if not l.startswith("echo ") and " && echo " not in l)
         has_head = any("HEAD is now at" in l or ", done." in l for l in recent_lines)
         
         if has_marker_line and has_head:
-            print(f"[GIT PUITY] ✅ All files updated! Worktree checkout 100% complete.")
+            print(f"[GIT PUTTY] ✅ All files updated! Worktree checkout 100% complete.")
             return True
             
         time.sleep(1.0)
@@ -239,7 +239,7 @@ def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 120, mark
     print("[WARNING] Timed out waiting for worktree checkout!")
     return False
 
-def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int = 120) -> bool:
+def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int = 60) -> bool:
     """
     Waits for git checkout/branch creation in Git PuTTY to complete and echo marker.
     - Dynamically monitors for credentials prompts (Username/Password) and fills them automatically.
@@ -263,12 +263,12 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
             if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
         )
         if has_marker:
-            print(f"[GIT PUITY] ✅ Switched to branch '{branch_name}' successfully!")
+            print(f"[GIT PUTTY] ✅ Switched to branch '{branch_name}' successfully!")
             return True
 
         # 2. Handle Username prompt (Check before error checks!)
         if not user_sent and any("username for" in l.lower() for l in bottom_lines):
-            print("[GIT PUITY] Detected Username prompt! Entering username...")
+            print("[GIT PUTTY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
@@ -277,7 +277,7 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
 
         # 3. Handle Password prompt (Check before error checks!)
         if not pass_sent and any("password for" in l.lower() for l in bottom_lines):
-            print("[GIT PUITY] Detected Password prompt! Entering password...")
+            print("[GIT PUTTY] Detected Password prompt! Entering password...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_PASSWORD, press_enter=True)
             pass_sent = True
@@ -293,7 +293,7 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
                 "fatal: authentication"
             ])
             if has_auth_err:
-                print(f"\n[GIT PUITY] 🚨 Authentication failed after entering password for branch '{branch_name}'!")
+                print(f"\n[GIT PUTTY] 🚨 Authentication failed after entering password for branch '{branch_name}'!")
                 return False
 
         time.sleep(1.0)
@@ -401,13 +401,14 @@ def check_claude_usage(claude_hwnd: int, threshold: float = None) -> tuple[float
         return None, "", False
 
 
-def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
+def clear_claude_context(claude_hwnd: int, session_name: str = "", timeout: int = 15) -> bool:
     """
-    Safely execute /clear in Claude PuTTY and actively verify that it executes,
+    Safely execute /clear [session_name] in Claude PuTTY and actively verify that it executes,
     clearing previous context and waiting for a clean prompt ('❯ ').
     Prevents prompt concatenation errors (e.g. '/clearcheck...').
     """
-    print("\n[CLAUDE PUITY] 🧹 Clearing previous context (/clear)...")
+    cmd = f"/clear {session_name}".strip() if session_name else "/clear"
+    print(f"\n[CLAUDE PUTTY] 🧹 Clearing previous context ({cmd})...")
     activate_window(claude_hwnd)
     time.sleep(0.2)
 
@@ -417,12 +418,12 @@ def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
     prompt_line = next((l for l in reversed(lines) if "❯" in l), "")
     clean_p = prompt_line.replace("\xa0", " ").strip()
     if clean_p and clean_p != "❯":
-        print(f"[CLAUDE PUITY] Detected unsubmitted text on prompt: '{clean_p}'. Clearing line...")
+        print(f"[CLAUDE PUTTY] Detected unsubmitted text on prompt: '{clean_p}'. Clearing line...")
         send_escape(claude_hwnd)
         time.sleep(0.2)
 
     # Paste /clear and submit Enter
-    paste_text(claude_hwnd, "/clear", press_enter=True)
+    paste_text(claude_hwnd, cmd, press_enter=True)
     time.sleep(0.5)
 
     start_time = time.time()
@@ -438,7 +439,7 @@ def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
         if "/clear" in clean_prompt:
             resend_count += 1
             if resend_count <= 3:
-                print(f"[CLAUDE PUITY] ⏳ /clear still on prompt line ('{clean_prompt}'). Resending Enter...")
+                print(f"[CLAUDE PUTTY] ⏳ {cmd} still on prompt line ('{clean_prompt}'). Resending Enter...")
                 activate_window(claude_hwnd)
                 send_enter(claude_hwnd)
                 time.sleep(0.8)
@@ -446,13 +447,13 @@ def clear_claude_context(claude_hwnd: int, timeout: int = 15) -> bool:
 
         # If prompt is cleanly reset to '❯' without /clear
         if clean_prompt == "❯":
-            print("[CLAUDE PUITY] ✅ Context successfully cleared! Clean prompt '❯' confirmed.")
+            print("[CLAUDE PUTTY] ✅ Context successfully cleared! Clean prompt '❯' confirmed.")
             time.sleep(1.0)
             return True
 
         time.sleep(0.5)
 
-    print("[CLAUDE PUITY] ⚠️ Timed out waiting for clean prompt after /clear, proceeding with caution.")
+    print(f"[CLAUDE PUTTY] ⚠️ Timed out waiting for clean prompt after {cmd}, proceeding with caution.")
     return False
 
 

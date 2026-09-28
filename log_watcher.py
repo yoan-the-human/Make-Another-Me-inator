@@ -207,7 +207,7 @@ class LogWatcher:
     def wait_for_claude_completion(self, claude_hwnd: int = None, idle_seconds: int = 10, max_timeout: int = 3600, poll_interval: int = None, progress_callback=None) -> bool:
         """
         Wait until Claude Code finishes thinking and tool execution.
-        - Preserves user clipboard and checks screen every `poll_interval` seconds (default 120s / 2 minutes).
+        - Preserves user clipboard and checks screen every `poll_interval` seconds (default 60s / 2 minutes).
         - Detects if Claude asks a question / choices: alerts via Telegram every 2 minutes until answered!
         - Only completes when Claude has genuinely finished the task.
         """
@@ -215,7 +215,7 @@ class LogWatcher:
         import telegram_alert
 
         if poll_interval is None:
-            poll_interval = getattr(config, "CLAUDE_POLL_INTERVAL", 120)
+            poll_interval = getattr(config, "CLAUDE_POLL_INTERVAL", 60)
 
         print(f"[CLAUDE MONITOR] Task submitted. Waiting 10s for Claude to engage...")
         time.sleep(10.0)

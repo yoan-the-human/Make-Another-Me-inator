@@ -17,10 +17,9 @@ RE_DIR = TASKS_DIR / "re"
 WORKING_DIR = TASKS_DIR / "working"
 COMPLETED_DIR = TASKS_DIR / "completed"
 ARCHIVE_DIR = TASKS_DIR / "archive"
-LOG_DIR = TASKS_DIR / "log"
 
 # Ensure all task directories exist
-for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR, LOG_DIR]:
+for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
 # Default Server repo root
@@ -55,11 +54,11 @@ if ENV_FILE.exists():
         PUTTY_LOG_PATH = Path(env_dict["PUTTY_LOG_PATH"])
 
     USAGE_THRESHOLD = float(env_dict.get("USAGE_THRESHOLD", 80.0))
-    CLAUDE_POLL_INTERVAL = int(env_dict.get("CLAUDE_POLL_INTERVAL", 120))
+    CLAUDE_POLL_INTERVAL = int(env_dict.get("CLAUDE_POLL_INTERVAL", 60))
 else:
     print(f"[WARNING] .env file not found at {ENV_FILE}!")
     USAGE_THRESHOLD = 80.0
-    CLAUDE_POLL_INTERVAL = 120
+    CLAUDE_POLL_INTERVAL = 60
 
 # Fallback default log file in project root if not set
 if not PUTTY_LOG_PATH:

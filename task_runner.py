@@ -3,6 +3,7 @@ import sys
 import time
 import shutil
 import re
+import random
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -89,12 +90,12 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
         f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
     )
 
-    print(f"\n[GIT PUITY] 4. Checking git status, committing, and pushing branch '{branch_name}' in {repo_dir}...")
+    print(f"\n[GIT PUTTY] 4. Checking git status, committing, and pushing branch '{branch_name}' in {repo_dir}...")
     
     putty.activate_window(git_hwnd)
     time.sleep(0.3)
     putty.paste_text(git_hwnd, git_script, press_enter=True)
-    print("[GIT PUITY] Monitoring git push for credentials prompt or completion...")
+    print("[GIT PUTTY] Monitoring git push for credentials prompt or completion...")
 
     start_push = time.time()
     user_sent = False
@@ -114,7 +115,7 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
             if not l.startswith("echo") and not l.startswith("root@") and "PUSH_RC" not in l
         )
         if has_push_ok:
-            print("[GIT PUITY] ✅ Push and commit completed successfully!")
+            print("[GIT PUTTY] ✅ Push and commit completed successfully!")
             return True
 
         # 2. Check for fatal auth error ONLY if password was already entered
@@ -130,12 +131,12 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
                 "invalid username or password"
             ])
             if has_fail_marker or has_auth_err:
-                print("\n[GIT PUITY] 🚨 Authentication failed after submitting credentials!")
+                print("\n[GIT PUTTY] 🚨 Authentication failed after submitting credentials!")
                 break
 
         # 3. Handle Username prompt
         if not user_sent and any("username for" in l.lower() for l in lines[-3:]):
-            print("[GIT PUITY] Detected Username prompt! Entering username...")
+            print("[GIT PUTTY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
@@ -145,7 +146,7 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
         # 4. Handle Password prompt
         if user_sent and not pass_sent and any("password for" in l.lower() for l in lines[-3:]):
             if not last_line.endswith("#") and not last_line.endswith("$"):
-                print("[GIT PUITY] Detected Password prompt! Entering password...")
+                print("[GIT PUTTY] Detected Password prompt! Entering password...")
                 time.sleep(0.5)
                 putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
                 pass_sent = True
@@ -195,13 +196,13 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
                 break
 
         if confirmed:
-            print(f"\n[GIT PUITY] ✅ Git confirmation detected! Branch '{branch_name}' push confirmed!")
+            print(f"\n[GIT PUTTY] ✅ Git confirmation detected! Branch '{branch_name}' push confirmed!")
             telegram_alert.send_git_push_confirmed_notification(branch_name)
             time.sleep(1.0)
             return True
 
-        if time.time() - last_reminder_time >= 120:
-            print(f"[GIT PUITY] ⏳ Still waiting for git push confirmation for '{branch_name}'...")
+        if time.time() - last_reminder_time >= 60:
+            print(f"[GIT PUTTY] ⏳ Still waiting for git push confirmation for '{branch_name}'...")
             telegram_alert.send_telegram_message(
                 f"⏳ *Reminder:* Pipeline is waiting for git push confirmation for `{branch_name}` in Git PuTTY!"
             )
@@ -387,7 +388,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     # Step 2: Switch or create branch in /data/development
     marker = f"==BRANCH_READY_{int(time.time() * 1000)}=="
     if is_new:
-        print(f"\n[GIT PUITY] 1. Fetching origin main and checking out new branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        print(f"\n[GIT PUTTY] 1. Fetching origin main and checking out new branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
         git_cmd = (
             f"cd {config.SERVER_REPO_DIR} && "
             f"git fetch origin main && "
@@ -395,7 +396,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
             f"echo '{marker}'"
         )
     else:
-        print(f"\n[GIT PUITY] 1. Switching to existing branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        print(f"\n[GIT PUTTY] 1. Switching to existing branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
         git_cmd = (
             f"cd {config.SERVER_REPO_DIR} && "
             f"git checkout {branch_name} && "
@@ -403,9 +404,9 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         )
 
     putty.paste_text(git_hwnd, git_cmd, press_enter=True)
-    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=120)
+    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60)
     if not ready:
-        print(f"\n[GIT PUITY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
+        print(f"\n[GIT PUTTY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
         telegram_alert.send_git_auth_failed_alert(branch_name, config.SERVER_REPO_DIR)
         print(f"Please switch to Git PuTTY, provide credentials or checkout branch '{branch_name}' manually.")
 
@@ -426,13 +427,13 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
                 )
             )
             if branch_ok:
-                print(f"[GIT PUITY] ✅ Branch '{branch_name}' confirmed active! Resuming pipeline...")
+                print(f"[GIT PUTTY] ✅ Branch '{branch_name}' confirmed active! Resuming pipeline...")
                 telegram_alert.send_git_push_confirmed_notification(branch_name)
                 time.sleep(1.0)
                 break
 
-            if time.time() - last_rem >= 120:
-                print(f"[GIT PUITY] ⏳ Still waiting for branch setup confirmation for '{branch_name}'...")
+            if time.time() - last_rem >= 60:
+                print(f"[GIT PUTTY] ⏳ Still waiting for branch setup confirmation for '{branch_name}'...")
                 telegram_alert.send_telegram_message(
                     f"⏳ *Reminder:* Pipeline is waiting for branch `{branch_name}` to be checked out in Git PuTTY!"
                 )
@@ -444,7 +445,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     putty.clear_claude_context(claude_hwnd)
 
     # Step 4: Send Claude prompt
-    print("\n[CLAUDE PUITY] 3. Sending task prompt to Claude...")
+    print("\n[CLAUDE PUTTY] 3. Sending task prompt to Claude...")
     time.sleep(1.0)
     watcher.mark_start()
     pasted = putty.paste_text(claude_hwnd, prompt, press_enter=True)
@@ -454,24 +455,14 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         putty.paste_text(claude_hwnd, prompt, press_enter=True)
 
     # Step 5: Wait for completion
-    print("[CLAUDE PUITY] Waiting for Claude to finish working on task...")
+    print("[CLAUDE PUTTY] Waiting for Claude to finish working on task...")
     completed = watcher.wait_for_claude_completion(claude_hwnd=claude_hwnd, idle_seconds=8, max_timeout=2400)
     if not completed:
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
-    # Save log snapshot
-    log_file = config.LOG_DIR / f"{task_file.stem}_claude.txt"
-    try:
-        claude_screen = putty.capture_screen_text(claude_hwnd)
-        with open(log_file, "w", encoding="utf-8", errors="replace") as f:
-            f.write(claude_screen)
-        print(f"[LOG] 📝 Saved Claude's response snapshot to {log_file}")
-    except Exception as e:
-        print(f"[WARNING] Could not save Claude response log: {e}")
-
     # Step 6: Commit and push
     handle_git_push(git_hwnd, branch_name, commit_msg, config.SERVER_REPO_DIR)
-    print(f"\n[GIT PUITY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR}.")
+    print(f"\n[GIT PUTTY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR}.")
 
     # Step 7: Move to completed
     completed_file = config.COMPLETED_DIR / task_name
@@ -481,9 +472,11 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     # Step 8: Usage check
     usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
 
-    # Step 9: Clear Claude context
-    print("[CLAUDE PUITY] 5. Sending /clear to wipe memory for next assignment...")
-    putty.clear_claude_context(claude_hwnd)
+    # Step 9: Clear Claude context and rename session for later access
+    rand_id = random.randint(100, 999)
+    session_name = f"{branch_name}-{rand_id}"
+    print(f"[CLAUDE PUTTY] 5. Sending /clear {session_name} to save conversation and wipe memory for next assignment...")
+    putty.clear_claude_context(claude_hwnd, session_name=session_name)
 
     if is_over_limit:
         telegram_alert.send_quota_alert(usage_pct, reset_time)
@@ -571,7 +564,7 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
         else:
             # BOTH re, pending, and working are completely empty: enter idle monitor
             has_new = telegram_alert.wait_for_new_task_or_alert(
-                interval_seconds=120,
+                interval_seconds=60,
                 git_hwnd=git_hwnd,
                 reproduction_handler=handle_reproduction
             )

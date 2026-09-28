@@ -19,8 +19,7 @@ tasks/
 ├── merged/       # Priority 0: Clean-up queue (deletes local branch if not active)
 ├── working/      # Currently active task (auto-recovers on script restart)
 ├── completed/    # Finished tasks pushed to remote GitLab/GitHub
-├── archive/      # Cleaned-up tasks whose branches have been deleted
-└── log/          # Saved terminal snapshots of Claude's output (<task>_claude.txt)
+└── archive/      # Cleaned-up tasks whose branches have been deleted
 ```
 
 ### Queue Priority Order:
@@ -60,7 +59,7 @@ PASSWORD=your_git_password
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_ID=123456789
 USAGE_THRESHOLD=80.0
-CLAUDE_POLL_INTERVAL=120
+CLAUDE_POLL_INTERVAL=60
 PUTTY_LOG_PATH=C:\path\to\putty_claude.log
 ```
 
@@ -71,7 +70,7 @@ PUTTY_LOG_PATH=C:\path\to\putty_claude.log
 | `TELEGRAM_BOT_TOKEN` | Bot token from `@BotFather` | *Required* |
 | `TELEGRAM_CHAT_ID` | Your personal Telegram chat ID | *Required* |
 | `USAGE_THRESHOLD` | Claude session quota limit % before pipeline safely pauses | `80.0` |
-| `CLAUDE_POLL_INTERVAL` | Screen inspection interval in seconds while Claude thinks | `120` |
+| `CLAUDE_POLL_INTERVAL` | Screen inspection interval in seconds while Claude thinks | `60` |
 | `PUTTY_LOG_PATH` | Path to the PuTTY session printable log file | `putty_claude.log` |
 
 ---
@@ -131,7 +130,6 @@ For every task file:
    - Runs `/clear` to wipe previous context.
    - Pastes prompt (Line 3+).
    - Monitors terminal screen and log file until generation completes (`· done` / prompt returned).
-   - Saves terminal snapshot to `tasks/log/<task_name>_claude.txt`.
 4. **Git Commit & Push** (Git PuTTY):
    - Checks if changes exist via `git status --porcelain`.
    - Commits with line 2 message.
@@ -142,7 +140,7 @@ For every task file:
    - Moves task from `working/` to `completed/`.
 6. **Quota & Clean**:
    - Runs `/usage` to check session consumption.
-   - Runs `/clear` to leave Claude clean for the next task.
+   - Runs `/clear <branch>-<3_digit_random>` to rename/save conversation session and leave Claude clean for the next task.
 7. **Idle Loop**:
    - If `merged/` contains tasks, checks every 2 minutes if the branch can be deleted (`git branch -d`).
    - Listens for Telegram commands (`reproduction`, `takeabreak`).
