@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.2.0...v1.3.0) (2026-10-05)
+
+
+### 🚀 New
+
+* /godark command in telegram for stopping reminders ([70e3f49](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/70e3f498fbd45173f3178a2168bfc1c03941c021))
+
 ## [1.2.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.1.2...v1.2.0) (2026-09-28)
 
 
