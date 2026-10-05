@@ -108,6 +108,8 @@ You can message your Telegram bot directly while the script is idling:
 | :--- | :--- |
 | `reproduction` or `/reproduction` | Runs `cd /data/development && git fetch origin main && git -C ../haskovo.net pull origin main` in Git PuTTY. Automatically handles multiple username/password prompts. **Immediately resets the 2-minute idle timer** to guarantee zero collision with merge checks. |
 | `takeabreak` or `/takeabreak` | Safely stops the automation pipeline immediately, simulating a clean `Ctrl+C` interrupt. |
+| `godark` or `/godark` | Silences periodic queue idle reminders without stopping the automation process. Automatically resumes normal communications when a new job starts in `pending/` or `re/`. |
+| `golight` or `/golight` | Restores periodic queue idle reminders manually if needed. |
 
 ### Automated Bot Notifications:
 - **❓ Claude Question Alert**: Claude asks for an interactive decision, file permission, or tool approval. The bot sends a preview of the question to your phone.

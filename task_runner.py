@@ -356,6 +356,7 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
 
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
     """Execute full workflow for a single task directly in /data/development."""
+    telegram_alert.set_dark_mode(False)
     task_name = task_file.name
     origin_parent = task_file.parent.name.lower()
     is_from_pending = (origin_parent == "pending")
@@ -496,7 +497,7 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     - Cleans up merged/ folder.
     - Processes re/ then pending/.
     - Recovers orphaned tasks in working/.
-    - When idle, monitors Telegram for 'reproduction' and 'takeabreak' commands.
+    - When idle, monitors Telegram for 'reproduction', 'takeabreak', and 'godark' commands.
     """
     telegram_alert.init_telegram_listener()
 

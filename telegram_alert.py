@@ -13,6 +13,17 @@ if sys.platform == "win32":
 import config
 
 _last_update_id = 0
+_is_dark = False
+
+def is_dark_mode() -> bool:
+    """Check if dark mode (silenced periodic idle reminders) is currently active."""
+    return _is_dark
+
+def set_dark_mode(enabled: bool):
+    """Enable or disable dark mode."""
+    global _is_dark
+    _is_dark = enabled
+
 
 def send_telegram_message(text: str) -> bool:
     """Send message to Telegram via Bot API."""
@@ -93,7 +104,7 @@ def check_telegram_commands() -> list[str]:
                     continue
 
                 # Normalize command: remove leading slash, bot tag, spaces, and make lowercase
-                cmd = raw_text.split("@")[0].lstrip("/").strip().lower().replace(" ", "")
+                cmd = raw_text.split("@")[0].strip().lstrip("/").strip().lower().replace(" ", "")
                 commands.append(cmd)
     except Exception:
         pass
@@ -145,16 +156,19 @@ def send_git_push_confirmed_notification(branch_name: str) -> bool:
 def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None):
     """
     Called when re, pending, and working folders are empty.
-    - Polls for user Telegram commands ('reproduction', 'takeabreak') every second.
+    - Polls for user Telegram commands ('reproduction', 'takeabreak', 'godark') every second.
     - If 'takeabreak' is received: raises KeyboardInterrupt for safe exit.
     - If 'reproduction' is received: executes reproduction routine in Git PuTTY and resets the 2-minute timer.
+    - If 'godark' is received: silences periodic reminders until a new task in pending or re starts.
     - Resumes immediately if new task files appear.
     """
+    global _is_dark
     re_files = list(config.RE_DIR.glob("*.txt"))
     pending_files = list(config.PENDING_DIR.glob("*.txt"))
     working_files = list(config.WORKING_DIR.glob("*.txt"))
     
     if re_files or pending_files or working_files:
+        _is_dark = False
         return True
 
     initial_merged_names = {f.name for f in config.MERGED_DIR.glob("*.txt")}
@@ -163,7 +177,10 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
         print(f"\n[QUEUE] Tasks in re/pending are empty, but branch in merged/ is active. Resting for {interval_seconds}s before re-checking...")
     else:
         print(f"\n[QUEUE EMPTY] All task folders (merged, re, pending, working) are empty! Will alert via Telegram every {interval_seconds}s until new task appears.")
-        send_telegram_message("📢 *Comrade Yoan!* All tasks in `merged`, `re`, `pending`, and `working` folders are completed!\nWaiting for new tasks...")
+        if not _is_dark:
+            send_telegram_message("📢 *Comrade Yoan!* All tasks in `merged`, `re`, `pending`, and `working` folders are completed!\nWaiting for new tasks...")
+        else:
+            print("[QUEUE] 🤫 Dark mode is active: suppressing initial empty queue Telegram alert.")
     
     elapsed = 0
     while True:
@@ -177,6 +194,16 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 print(f"\n[TELEGRAM] 🛑 Command '{cmd}' received! Shutting down pipeline cleanly...")
                 send_telegram_message("🛑 *Comrade Yoan! Order 'takeabreak' received!*\nExiting automation pipeline cleanly. Samovar is cooling down, tovarisch! 🪆🐻")
                 raise KeyboardInterrupt("Telegram command 'takeabreak' received.")
+
+            elif cmd in ["godark", "go_dark", "dark"]:
+                _is_dark = True
+                print(f"\n[TELEGRAM] 🤫 Command '{cmd}' received! Going dark - periodic idle reminders silenced...")
+                send_telegram_message("🤫 *Orders received! Going dark, Comrade Yoan!* Periodic reminders silenced. Process remains on watch in the bunker and will resume normal communications when a new job starts in `pending` or `re`! 🥷🪆")
+
+            elif cmd in ["golight", "go_light", "light", "loud", "nodark"]:
+                _is_dark = False
+                print(f"\n[TELEGRAM] 📢 Command '{cmd}' received! Resuming periodic reminders...")
+                send_telegram_message("📢 *Orders received! Normal communication restored, Comrade Yoan!* Reminders enabled. 🪆☭")
 
             elif cmd == "reproduction":
                 # 1. RESET TIMER IMMEDIATELY ON RECEIPT
@@ -212,6 +239,8 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 found_name = f"merged/{new_merged[0].name}"
             print(f"[QUEUE] Detected task in queue: '{found_name}'! Resuming work...")
             send_telegram_message(f"🚀 *New task detected:* `{found_name}`. Resuming automation!")
+            if curr_re or curr_pending or curr_working:
+                _is_dark = False
             return True
             
         time.sleep(1)
@@ -222,7 +251,10 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 print(f"[QUEUE] {interval_seconds}s rest completed. Re-checking merged queue...")
                 return True
             else:
-                send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
+                if not _is_dark:
+                    send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
+                else:
+                    print(f"[QUEUE] 🤫 Dark mode active ({elapsed}s elapsed): periodic reminder suppressed. Machine resting in silence...")
                 elapsed = 0
 
 if __name__ == "__main__":
