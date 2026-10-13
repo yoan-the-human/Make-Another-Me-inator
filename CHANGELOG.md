@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.3.0...v2.0.0) (2026-10-13)
+
+
+### 🚀 New
+
+* new logic for 2 gits at the same time, apks and so on ([9206ca9](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/9206ca94b0371ca1f8fb41c9432936cb89f1f89b))
+* script can be used for more than one project ([2a41702](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/2a417027f90127ae9cf67ea4f6643bc2f8ac1026))
+
 ## [1.3.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.2.0...v1.3.0) (2026-10-05)
 
 
