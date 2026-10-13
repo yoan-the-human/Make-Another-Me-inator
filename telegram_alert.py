@@ -73,10 +73,10 @@ def init_telegram_listener():
     except Exception as e:
         print(f"[TELEGRAM] Warning during listener init: {e}")
 
-def check_telegram_commands() -> list[str]:
+def check_telegram_commands() -> list[tuple[str, list[str]]]:
     """
     Poll Telegram getUpdates for new messages from the authorized user chat.
-    Returns a list of normalized command strings (e.g. 'reproduction', 'takeabreak').
+    Returns a list of tuples: (cmd, args).
     """
     global _last_update_id
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
@@ -103,9 +103,12 @@ def check_telegram_commands() -> list[str]:
                 if not raw_text:
                     continue
 
-                # Normalize command: remove leading slash, bot tag, spaces, and make lowercase
-                cmd = raw_text.split("@")[0].strip().lstrip("/").strip().lower().replace(" ", "")
-                commands.append(cmd)
+                text = raw_text.split("@")[0].strip().lstrip("/")
+                parts = text.split()
+                if not parts:
+                    continue
+                cmd, args = parts[0].lower(), parts[1:]
+                commands.append((cmd, args))
     except Exception:
         pass
     return commands
@@ -153,12 +156,13 @@ def send_git_push_confirmed_notification(branch_name: str) -> bool:
     msg = f"✅ *Spasibo, Comrade Yoan!* Git push confirmed for `{branch_name}`! Resuming pipeline! 🚀☭"
     return send_telegram_message(msg)
 
-def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None):
+def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None, review_handler=None):
     """
     Called when re, pending, and working folders are empty.
-    - Polls for user Telegram commands ('reproduction', 'takeabreak', 'godark') every second.
+    - Polls for user Telegram commands ('reproduction', 'review', 'takeabreak', 'godark') every second.
     - If 'takeabreak' is received: raises KeyboardInterrupt for safe exit.
     - If 'reproduction' is received: executes reproduction routine in Git PuTTY and resets the 2-minute timer.
+    - If 'review' is received: executes review routine in Git PuTTY and resets the 2-minute timer.
     - If 'godark' is received: silences periodic reminders until a new task in pending or re starts.
     - Resumes immediately if new task files appear.
     """
@@ -189,7 +193,7 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
 
         # --- Check for Telegram commands from user ---
         cmds = check_telegram_commands()
-        for cmd in cmds:
+        for cmd, args in cmds:
             if cmd in ["takeabreak", "break", "stop", "exit"]:
                 print(f"\n[TELEGRAM] 🛑 Command '{cmd}' received! Shutting down pipeline cleanly...")
                 send_telegram_message("🛑 *Comrade Yoan! Order 'takeabreak' received!*\nExiting automation pipeline cleanly. Samovar is cooling down, tovarisch! 🪆🐻")
@@ -208,21 +212,25 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
             elif cmd == "reproduction":
                 # 1. RESET TIMER IMMEDIATELY ON RECEIPT
                 elapsed = 0
-                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received! Checking applicability...")
-                if "exo-android" in str(config.SERVER_REPO_DIR).lower():
-                    print("[TELEGRAM] ⚠️ Reproduction command skipped: disabled in exo-android.")
-                    send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* Reproduction command is disabled when working in `exo-android` (no reproduction target here)! 🇷🇺")
-                else:
-                    send_telegram_message(f"🔄 *Orders received!* Executing reproduction command in Git PuTTY ({config.SERVER_REPO_DIR}):\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
-                    if git_hwnd and reproduction_handler:
-                        success = reproduction_handler(git_hwnd, repo_dir=config.SERVER_REPO_DIR)
-                        if success:
-                            send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
-                        else:
-                            send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received! Executing reproduction in Git PuTTY ({config.DEV_REPO_DIR})...")
+                send_telegram_message(f"🔄 *Orders received!* Executing reproduction command in Git PuTTY ({config.DEV_REPO_DIR}):\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
+                if git_hwnd and reproduction_handler:
+                    success = reproduction_handler(git_hwnd, repo_dir=config.DEV_REPO_DIR)
+                    if success:
+                        send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
                     else:
-                        print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
+                        send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                else:
+                    print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
                 print(f"✅ Reproduction finished.")
+
+            elif cmd == "review":
+                elapsed = 0
+                print(f"\n[TELEGRAM] 📱 Command 'review' received with args: {args}")
+                if review_handler:
+                    review_handler(git_hwnd, args)
+                else:
+                    print("[TELEGRAM] ⚠️ No review handler provided.")
 
         # Check if new files appeared in re, pending, working, or a NEW file in merged
         curr_re = list(config.RE_DIR.glob("*.txt"))

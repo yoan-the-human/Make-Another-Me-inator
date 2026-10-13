@@ -100,13 +100,33 @@ When launching the script for the first time:
 
 ---
 
+## 📱 EXO Tasks (Dual-Repository Support)
+
+The pipeline automatically identifies EXO mobile application tasks:
+- **Detection**: A task is recognized as an EXO task if the prompt contains `/data/exo-android`.
+- **Backend Touch**: If the prompt contains a `Backend:` section (`^Backend:`), the task touches both `/data/development` (Laravel site + API) and `/data/exo-android`. Otherwise, it touches only `/data/exo-android` (app-only).
+- **Execution & Branch Setup**:
+  - For backend tasks, `/data/development` is verified for clean status (`git status --porcelain`). If uncommitted work exists, the pipeline halts with a Telegram warning.
+  - Branches are created/checked out in both repositories under the same branch name.
+  - Claude runs in `/data/exo-android` with permissions to edit `/data/development`.
+  - The pipeline prefixes Claude's prompt with an instructions header forbidding Claude from committing, pushing, or switching branches.
+- **Commit & Push**:
+  - Repositories are pushed with Laravel first so API merge requests exist prior to app merge requests.
+  - Merge requests are tagged with `-o merge_request.label=exo` and link both repositories. Repositories without changes are skipped to prevent empty MRs.
+- **APK Verification**:
+  - After push, the pipeline checks `https://development.haskovo.net/exo/<task_name>.apk`. If present, sends `✅ <task> done` with APK link; if missing, alerts with `⚠️ <task> finished but APK is missing`.
+
+---
+
 ## 🤖 Telegram Bot Control & Alerts
 
 You can message your Telegram bot directly while the script is idling:
 
 | Command | Action |
 | :--- | :--- |
-| `reproduction` or `/reproduction` | Runs `cd /data/development && git fetch origin main && git -C ../haskovo.net pull origin main` in Git PuTTY. Automatically handles multiple username/password prompts. **Immediately resets the 2-minute idle timer** to guarantee zero collision with merge checks. |
+| `review <name>` or `/review <name>` | Prepares review for `<name>`. Switches `/data/development` if task touches backend, warns if migration files exist, checks APK link (`https://development.haskovo.net/exo/<name>.apk`), and sends tappable link to Telegram. Resets the 2-minute idle timer. |
+| `review` or `/review` | Lists completed tasks with API / app-only tags and APK links. |
+| `reproduction` or `/reproduction` | Runs `cd /data/development && git fetch origin main && git -C ../haskovo.net pull origin main` in Git PuTTY. Automatically handles multiple username/password prompts. Always targets `/data/development` (even for EXO tasks). **Immediately resets the 2-minute idle timer**. |
 | `takeabreak` or `/takeabreak` | Safely stops the automation pipeline immediately, simulating a clean `Ctrl+C` interrupt. |
 | `godark` or `/godark` | Silences periodic queue idle reminders without stopping the automation process. Automatically resumes normal communications when a new job starts in `pending/` or `re/`. |
 | `golight` or `/golight` | Restores periodic queue idle reminders manually if needed. |

@@ -239,11 +239,12 @@ def wait_for_git_worktree(hwnd: int, worktree_dir: str, timeout: int = 60, marke
     print("[WARNING] Timed out waiting for worktree checkout!")
     return False
 
-def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int = 60) -> bool:
+def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int = 60, dirty_marker: str = None) -> bool | str:
     """
     Waits for git checkout/branch creation in Git PuTTY to complete and echo marker.
     - Dynamically monitors for credentials prompts (Username/Password) and fills them automatically.
     - Checks recent terminal lines for isolated marker and branch switch confirmation.
+    - If dirty_marker is provided and detected, returns 'dirty'.
     """
     start_time = time.time()
     user_sent = False
@@ -256,6 +257,17 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
         bottom_lines = lines[-5:] if len(lines) >= 5 else lines
         bottom_text = "\n".join(bottom_lines).lower()
 
+        last_line = lines[-1].lower() if lines else ""
+
+        # 0. Check dirty marker if specified
+        if dirty_marker and any(
+            (l == dirty_marker or l == f"'{dirty_marker}'" or l == f'"{dirty_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
+        ):
+            print(f"[GIT PUTTY] 🚨 Uncommitted changes detected in repository!")
+            return "dirty"
+
         # 1. Check success marker
         has_marker = any(
             (l == marker or l == f"'{marker}'" or l == f'"{marker}"')
@@ -266,8 +278,18 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
             print(f"[GIT PUTTY] ✅ Switched to branch '{branch_name}' successfully!")
             return True
 
-        # 2. Handle Username prompt (Check before error checks!)
-        if not user_sent and any("username for" in l.lower() for l in bottom_lines):
+        # Check active prompts on the last visible line
+        is_user_prompt = ("username for" in last_line and last_line.endswith(":"))
+        is_pass_prompt = ("password for" in last_line and last_line.endswith(":"))
+
+        # Reset submission flags once Git has processed credentials and moved past prompt
+        if not is_user_prompt:
+            user_sent = False
+        if not is_pass_prompt:
+            pass_sent = False
+
+        # 2. Handle Username prompt
+        if is_user_prompt and not user_sent:
             print("[GIT PUTTY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_USERNAME, press_enter=True)
@@ -275,8 +297,8 @@ def wait_for_git_branch(hwnd: int, branch_name: str, marker: str, timeout: int =
             time.sleep(1.0)
             continue
 
-        # 3. Handle Password prompt (Check before error checks!)
-        if not pass_sent and any("password for" in l.lower() for l in bottom_lines):
+        # 3. Handle Password prompt
+        if is_pass_prompt and not pass_sent:
             print("[GIT PUTTY] Detected Password prompt! Entering password...")
             time.sleep(0.5)
             paste_text(hwnd, config.GIT_PASSWORD, press_enter=True)

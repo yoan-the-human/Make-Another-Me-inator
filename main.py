@@ -80,11 +80,16 @@ def main():
         )
         for idx, (f, queue_type) in enumerate(all_tasks, 1):
             info = task_runner.parse_task_file(f)
+            repos = task_runner.task_repos(info)
             print(f"\nTask [{idx}] [{queue_type}]: {f.name}")
             print(f"  Branch:     {info['branch_name']} ({'NEW' if info['is_new_branch'] else 'EXISTING'})")
-            print(f"  Directory:  {config.SERVER_REPO_DIR}")
+            print(f"  EXO:        {'yes' if info['is_exo'] else 'no'}")
+            print(f"  Backend:    {'yes' if info['has_backend'] else 'no'}")
+            print(f"  Repos:      {', '.join(repos)}")
+            if info['is_exo']:
+                print(f"  APK URL:    {config.EXO_APK_BASE_URL}{info['task_name']}.apk")
             if "MERGED" in queue_type:
-                print("  Action:     Check if development is on this branch; if not, git branch -d")
+                print("  Action:     Check if repos are on this branch; if not, git branch -d")
             else:
                 print(f"  Commit Msg: {info['commit_message']}")
                 print(f"  Prompt:     {info['prompt'][:80]}...")

@@ -24,6 +24,9 @@ for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCH
 
 # Default Server repo root
 SERVER_REPO_DIR = "/data/development"
+DEV_REPO_DIR = "/data/development"          # Laravel (site + API), served at development.haskovo.net
+EXO_REPO_DIR = "/data/exo-android"          # Android app
+EXO_APK_BASE_URL = "https://development.haskovo.net/exo/"   # files live in /mnt/nvme/exo-apks/
 
 # Load .env
 ENV_FILE = BASE_DIR / ".env"

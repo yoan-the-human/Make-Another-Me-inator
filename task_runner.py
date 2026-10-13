@@ -5,6 +5,7 @@ import shutil
 import re
 import random
 from pathlib import Path
+import requests
 
 if sys.platform == "win32":
     try:
@@ -74,23 +75,58 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
         "branch_name": branch_name,
         "is_new_branch": is_new,
         "commit_message": line2,
-        "prompt": prompt
+        "prompt": prompt,
+        "task_name": file_path.stem,
+        "is_exo": "/data/exo-android" in prompt,
+        "has_backend": re.search(r"^Backend:", prompt, re.M) is not None
     }
 
-def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: str = config.SERVER_REPO_DIR) -> bool:
-    """Execute git add, commit, and push directly in repo_dir (/data/development)."""
+def task_repos(info: dict) -> list[str]:
+    """Return repositories list for task. Laravel first if backend present."""
+    if not info.get("is_exo"):
+        return [config.SERVER_REPO_DIR]
+    return ([config.DEV_REPO_DIR] if info.get("has_backend") else []) + [config.EXO_REPO_DIR]
+
+def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repos: list[str] | str = None, is_exo: bool = False, task_name: str = "") -> bool:
+    """Execute git add, commit, and push in target repo(s)."""
+    if repos is None:
+        target_repos = [config.SERVER_REPO_DIR]
+    elif isinstance(repos, str):
+        target_repos = [repos]
+    else:
+        target_repos = list(repos)
+
     push_uid = f"{int(time.time())}_{os.getpid()}"
     push_ok_marker = f"==PUSH_OK_{push_uid}=="
     push_fail_marker = f"==PUSH_FAIL_{push_uid}=="
-    git_script = (
-        f"cd {repo_dir} && "
-        f"if [ -n \"$(git status --porcelain)\" ]; then git add . && git commit -m \"{commit_msg}\" ; fi ; "
-        f"git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main ; "
-        f"PUSH_RC=$? ; "
-        f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
-    )
 
-    print(f"\n[GIT PUTTY] 4. Checking git status, committing, and pushing branch '{branch_name}' in {repo_dir}...")
+    repos_str = " ".join(f'"{r}"' for r in target_repos)
+
+    if is_exo:
+        git_script = (
+            f"PUSH_RC=0 ; "
+            f"for R in {repos_str}; do "
+            f"cd \"$R\" || continue ; "
+            f"git show-ref -q \"refs/heads/{branch_name}\" || continue ; "
+            f"[ -n \"$(git status --porcelain)\" ] && git add . && git commit -m \"{commit_msg}\" ; "
+            f"[ \"$(git rev-list --count origin/main..\"{branch_name}\")\" -gt 0 ] || continue ; "
+            f"git push -u origin \"{branch_name}\" -o merge_request.create -o merge_request.target=main "
+            f"-o merge_request.label=exo "
+            f"-o merge_request.description=\"EXO task {task_name}. Same branch in yoan/exo-android and yoan/haskovo.net-l13. Merge Laravel first.\" || PUSH_RC=$? ; "
+            f"done ; "
+            f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
+        )
+    else:
+        target_dir = target_repos[0] if target_repos else config.SERVER_REPO_DIR
+        git_script = (
+            f"cd {target_dir} && "
+            f"if [ -n \"$(git status --porcelain)\" ]; then git add . && git commit -m \"{commit_msg}\" ; fi ; "
+            f"git push -u origin {branch_name} -o merge_request.create -o merge_request.target=main ; "
+            f"PUSH_RC=$? ; "
+            f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
+        )
+
+    print(f"\n[GIT PUTTY] 4. Checking git status, committing, and pushing branch '{branch_name}' in {target_repos}...")
     
     putty.activate_window(git_hwnd)
     time.sleep(0.3)
@@ -101,7 +137,7 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
     user_sent = False
     pass_sent = False
 
-    while time.time() - start_push < 180:
+    while time.time() - start_push < 240:
         screen = putty.capture_screen_text(git_hwnd)
         lines = [l.strip() for l in screen.splitlines() if l.strip()]
         recent_lines = lines[-25:]
@@ -118,10 +154,20 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
             print("[GIT PUTTY] ✅ Push and commit completed successfully!")
             return True
 
-        # 2. Check for fatal auth error ONLY if password was already entered
-        if pass_sent:
+        # Check active prompts on the last visible line
+        is_user_prompt = ("username for" in last_line and last_line.endswith(":"))
+        is_pass_prompt = ("password for" in last_line and last_line.endswith(":"))
+
+        # Reset submission flags once Git has processed credentials and moved past prompt
+        if not is_user_prompt:
+            user_sent = False
+        if not is_pass_prompt:
+            pass_sent = False
+
+        # 2. Check for fatal auth error ONLY if password was already entered and not at active prompt
+        if pass_sent and not is_pass_prompt:
             has_fail_marker = any(
-                (l == push_fail_marker or l == f'"{push_fail_marker}"' or l == f"'{push_fail_marker}'")
+                (l == push_fail_marker or l == f'"{push_fail_marker}"' or l == f'"{push_fail_marker}"')
                 for l in recent_lines
                 if not l.startswith("echo") and not l.startswith("root@") and "PUSH_RC" not in l
             )
@@ -135,35 +181,35 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
                 break
 
         # 3. Handle Username prompt
-        if not user_sent and any("username for" in l.lower() for l in lines[-3:]):
+        if is_user_prompt and not user_sent:
             print("[GIT PUTTY] Detected Username prompt! Entering username...")
             time.sleep(0.5)
             putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
             user_sent = True
-            time.sleep(1.5)
+            time.sleep(1.0)
             continue
 
         # 4. Handle Password prompt
-        if user_sent and not pass_sent and any("password for" in l.lower() for l in lines[-3:]):
-            if not last_line.endswith("#") and not last_line.endswith("$"):
-                print("[GIT PUTTY] Detected Password prompt! Entering password...")
-                time.sleep(0.5)
-                putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
-                pass_sent = True
-                time.sleep(2.0)
-                continue
+        if is_pass_prompt and not pass_sent:
+            print("[GIT PUTTY] Detected Password prompt! Entering password...")
+            time.sleep(0.5)
+            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+            pass_sent = True
+            time.sleep(2.0)
+            continue
 
         time.sleep(1.0)
 
     # --- Halt and alert if not successful ---
+    primary_repo = target_repos[0] if target_repos else config.SERVER_REPO_DIR
     print("\n" + "=" * 65)
     print("🚨 [PIPELINE HALTED] GIT PUSH FAILED OR REQUIRES MANUAL INTERACTION!")
-    print(f"Branch:     {branch_name}")
-    print(f"Repository: {repo_dir}")
+    print(f"Branch:       {branch_name}")
+    print(f"Repositories: {target_repos}")
     print("Please check Git PuTTY.")
     print("=" * 65 + "\n")
 
-    telegram_alert.send_git_auth_failed_alert(branch_name, repo_dir)
+    telegram_alert.send_git_auth_failed_alert(branch_name, primary_repo)
 
     confirmation_patterns = [
         f"-> {branch_name}",
@@ -214,13 +260,9 @@ def handle_reproduction(git_hwnd: int, repo_dir: str = None) -> bool:
     """
     Executes 'git fetch origin main && git -C ../haskovo.net pull origin main' in Git PuTTY.
     Dynamically listens and fills username and password prompts (which may occur multiple times).
-    Disabled when working in exo-android!
+    Always runs in config.DEV_REPO_DIR (/data/development).
     """
-    target_dir = repo_dir or config.SERVER_REPO_DIR
-    if "exo-android" in str(target_dir).lower():
-        print(f"\n[REPRODUCTION] ⚠️ Reproduction command is disabled for '{target_dir}'! Doing nothing.")
-        return False
-
+    target_dir = config.DEV_REPO_DIR
     uid = f"{int(time.time() * 1000)}_{os.getpid()}"
     ok_marker = f"==REPRO_OK_{uid}=="
     fail_marker = f"==REPRO_FAIL_{uid}=="
@@ -301,7 +343,6 @@ def handle_reproduction(git_hwnd: int, repo_dir: str = None) -> bool:
 def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path, repo_dir: str = None) -> bool:
     """Process a file in tasks/merged/: delete branch if not active, archive task."""
     task_name = task_file.name
-    target_dir = repo_dir or config.SERVER_REPO_DIR
     try:
         task_info = parse_task_file(task_file, is_new_branch=False)
         branch_name = task_info["branch_name"]
@@ -309,22 +350,26 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path, repo_dir: str =
         print(f"[MERGED QUEUE] ⚠️ Failed to parse branch from '{task_name}': {e}")
         return False
 
+    repos = task_repos(task_info) if task_info.get("is_exo") else [repo_dir or config.SERVER_REPO_DIR]
+    repos_str = " ".join(f'"{r}"' for r in repos)
+
     uid = f"{int(time.time() * 1000)}_{os.getpid()}"
     active_marker = f"==BRANCH_ACTIVE_{uid}=="
     deleted_marker = f"==BRANCH_DELETED_{uid}=="
 
     check_cmd = (
-        f"cd {target_dir} && "
+        f"ACTIVE=0 ; "
+        f"for R in {repos_str}; do "
+        f"cd \"$R\" || continue ; "
+        f"git show-ref -q \"refs/heads/{branch_name}\" || continue ; "
         f"CUR_B=$(git branch --show-current) ; "
-        f"if [ \"$CUR_B\" = \"{branch_name}\" ]; then "
-        f"echo '{active_marker}' ; "
-        f"else "
+        f"if [ \"$CUR_B\" = \"{branch_name}\" ]; then ACTIVE=1; break; fi ; "
         f"git branch -d \"{branch_name}\" ; "
-        f"echo '{deleted_marker}' ; "
-        f"fi"
+        f"done ; "
+        f"if [ $ACTIVE -eq 1 ]; then echo '{active_marker}'; else echo '{deleted_marker}'; fi"
     )
 
-    print(f"\n[MERGED QUEUE] 🧹 Checking branch '{branch_name}' from '{task_name}' in {target_dir}...")
+    print(f"\n[MERGED QUEUE] 🧹 Checking branch '{branch_name}' from '{task_name}' in {repos}...")
     putty.paste_text(git_hwnd, check_cmd, press_enter=True)
 
     start_time = time.time()
@@ -339,7 +384,7 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path, repo_dir: str =
             if not l.startswith("echo ") and " && echo " not in l and not l.startswith("root@")
         )
         if is_active:
-            print(f"[MERGED QUEUE] ⏸️ Development is currently on branch '{branch_name}'! Doing nothing; file remains in merged/.\n")
+            print(f"[MERGED QUEUE] ⏸️ Development/repo is currently on branch '{branch_name}'! Doing nothing; file remains in merged/.\n")
             return False
 
         is_deleted = any(
@@ -361,6 +406,144 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path, repo_dir: str =
     print(f"[MERGED QUEUE] ⚠️ Timed out waiting for check/delete marker for '{branch_name}'.\n")
     return False
 
+def handle_review(git_hwnd: int, args: list[str]) -> bool:
+    """
+    Handle Telegram 'review [name]' command while pipeline is idle.
+    """
+    if not args:
+        completed_files = sorted(list(config.COMPLETED_DIR.glob("*.txt")))
+        if not completed_files:
+            telegram_alert.send_telegram_message("📱 *Review:* No tasks currently in `completed/`.")
+            return True
+        lines = ["📱 *Completed tasks ready for review:*"]
+        for cf in completed_files:
+            try:
+                info = parse_task_file(cf)
+                t_type = "API" if info.get("has_backend") else ("app-only" if info.get("is_exo") else "site")
+                if info.get("is_exo"):
+                    apk_url = f"{config.EXO_APK_BASE_URL}{info['task_name']}.apk"
+                    lines.append(f"• `{info['task_name']}` ({t_type}) - [APK]({apk_url})")
+                else:
+                    lines.append(f"• `{info['task_name']}` ({t_type})")
+            except Exception:
+                lines.append(f"• `{cf.stem}`")
+        telegram_alert.send_telegram_message("\n".join(lines))
+        return True
+
+    task_name = args[0].strip().lower()
+    if not re.match(r'^[a-z0-9-]+$', task_name):
+        telegram_alert.send_telegram_message(f"❌ *Invalid task name:* `{task_name}`. Only alphanumeric characters and hyphens allowed!")
+        return False
+
+    candidate_dirs = [config.COMPLETED_DIR, config.RE_DIR, config.MERGED_DIR, config.ARCHIVE_DIR]
+    found_file = None
+    for c_dir in candidate_dirs:
+        cand = c_dir / f"{task_name}.txt"
+        if cand.exists():
+            found_file = cand
+            break
+
+    if not found_file:
+        telegram_alert.send_telegram_message(f'❌ No task "{task_name}"')
+        return False
+
+    try:
+        info = parse_task_file(found_file)
+    except Exception as e:
+        telegram_alert.send_telegram_message(f'❌ Failed to parse task "{task_name}": {e}')
+        return False
+
+    branch = info["branch_name"]
+    is_exo = info.get("is_exo", False)
+    has_backend = info.get("has_backend", False)
+
+    dev_status = ""
+    migration_warning = ""
+
+    if has_backend or not is_exo:
+        uid = f"{int(time.time() * 1000)}_{os.getpid()}"
+        dirty_m = f"==REVIEW_DIRTY_{uid}=="
+        ok_m = f"==REVIEW_OK_{uid}=="
+        fail_m = f"==REVIEW_FAIL_{uid}=="
+        mig_start = f"==MIG_START_{uid}=="
+        mig_end = f"==MIG_END_{uid}=="
+
+        review_script = (
+            f"cd {config.DEV_REPO_DIR} && "
+            f"if [ -n \"$(git status --porcelain)\" ]; then echo '{dirty_m}'; "
+            f"elif git checkout {branch}; then echo '{ok_m}'; "
+            f"echo '{mig_start}'; git diff --name-only origin/main...{branch} -- database/migrations; echo '{mig_end}'; "
+            f"else echo '{fail_m}'; fi"
+        )
+        print(f"\n[REVIEW] 📱 Switching /data/development to '{branch}' for review...")
+        putty.activate_window(git_hwnd)
+        time.sleep(0.3)
+        putty.paste_text(git_hwnd, review_script, press_enter=True)
+
+        start_t = time.time()
+        switched = False
+        is_dirty = False
+        failed = False
+        captured_lines = []
+        while time.time() - start_t < 30:
+            screen = putty.capture_screen_text(git_hwnd)
+            lines = [l.strip() for l in screen.splitlines() if l.strip()]
+            recent = lines[-25:]
+            if any(l == dirty_m for l in recent if not l.startswith("echo ")):
+                is_dirty = True
+                break
+            if any(l == ok_m for l in recent if not l.startswith("echo ")):
+                switched = True
+                captured_lines = lines
+                break
+            if any(l == fail_m for l in recent if not l.startswith("echo ")):
+                failed = True
+                break
+            time.sleep(0.5)
+
+        if is_dirty:
+            dev_status = f"development → ⚠️ /data/development has uncommitted changes, not switching"
+        elif switched:
+            dev_status = f"development → {branch} ✅"
+            mig_files = []
+            capturing = False
+            for l in captured_lines:
+                if mig_start in l:
+                    capturing = True
+                    continue
+                if mig_end in l and capturing:
+                    break
+                if capturing and l and not l.startswith("git ") and not l.startswith("echo ") and not l.startswith("root@"):
+                    mig_files.append(l)
+            if mig_files:
+                migration_warning = f"\n⚠️ *This branch has migrations:* `{', '.join(mig_files)}`.\nRun them yourself (`php artisan migrate --path=...`) before testing."
+        else:
+            dev_status = f"development → ❌ Failed to switch to {branch}"
+    else:
+        dev_status = "development → app-only, development unchanged"
+
+    apk_line = ""
+    if is_exo:
+        apk_url = f"{config.EXO_APK_BASE_URL}{task_name}.apk"
+        try:
+            res = requests.head(apk_url, timeout=10)
+            has_apk = (res.status_code == 200)
+        except Exception:
+            has_apk = False
+        if has_apk:
+            apk_line = f"\nAPK: {apk_url}"
+        else:
+            apk_line = f"\n⚠️ No APK yet for {task_name}"
+
+    reply_msg = (
+        f"📱 *Review:* `{task_name}` (`{branch}`)\n"
+        f"{dev_status}"
+        f"{migration_warning}"
+        f"{apk_line}"
+    )
+    telegram_alert.send_telegram_message(reply_msg)
+    return True
+
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
     """Execute full workflow for a single task directly in detected repository directory."""
     telegram_alert.set_dark_mode(False)
@@ -368,15 +551,6 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     origin_parent = task_file.parent.name.lower()
     is_from_pending = (origin_parent == "pending")
 
-    # Step 0: Detect active working directory from Git PuTTY
-    active_repo_dir = putty.detect_git_working_dir(git_hwnd) or config.SERVER_REPO_DIR
-    config.SERVER_REPO_DIR = active_repo_dir
-
-    print(f"\n=======================================================")
-    print(f"🚀 STARTING TASK: {task_name}")
-    print(f"📍 ACTIVE REPOSITORY: {active_repo_dir}")
-    print(f"=======================================================")
-    
     # Step 1: Move to working folder
     working_file = config.WORKING_DIR / task_name
     shutil.move(str(task_file), str(working_file))
@@ -392,40 +566,91 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     is_new = task_info["is_new_branch"]
     commit_msg = task_info["commit_message"].replace('"', '\\"')
     prompt = task_info["prompt"]
+    is_exo = task_info.get("is_exo", False)
+    has_backend = task_info.get("has_backend", False)
 
-    # Adapt prompt if it specifies 'development folder' but working in another folder
-    folder_name = Path(active_repo_dir).name
-    if folder_name.lower() != "development" and "development folder" in prompt.lower():
-        prompt = re.sub(r'development\s+folder', f'{folder_name} folder', prompt, flags=re.IGNORECASE)
-    
-    print(f"  -> Repository:    {active_repo_dir}")
+    repos = task_repos(task_info)
+    if is_exo:
+        active_repo_dir = config.EXO_REPO_DIR
+    else:
+        active_repo_dir = putty.detect_git_working_dir(git_hwnd) or config.SERVER_REPO_DIR
+        config.SERVER_REPO_DIR = active_repo_dir
+
+    print(f"\n=======================================================")
+    print(f"🚀 STARTING TASK: {task_name}")
+    print(f"📍 REPOSITORIES: {repos}")
+    print(f"=======================================================")
+
+    # Format prompt for EXO tasks or adapt for site tasks
+    if is_exo:
+        repos_str = ", ".join(repos)
+        header = (
+            f'EXO task "{task_info["task_name"]}" (task file {task_info["task_name"]}.txt). '
+            f'First read /data/exo-android/delete-later/instructions.txt.\n'
+            f'The pipeline already created and checked out branch {branch_name} in: {repos_str}. '
+            f"Don't create or switch branches,\n"
+            f"don't commit and don't push: the pipeline commits and pushes after you finish.\n"
+            f"---\n"
+        )
+        prompt = header + prompt
+    else:
+        folder_name = Path(active_repo_dir).name
+        if folder_name.lower() != "development" and "development folder" in prompt.lower():
+            prompt = re.sub(r'development\s+folder', f'{folder_name} folder', prompt, flags=re.IGNORECASE)
+
+    print(f"  -> Repositories:  {repos}")
     print(f"  -> Branch:        {branch_name} ({'NEW branch off origin/main' if is_new else 'EXISTING branch'})")
     print(f"  -> Commit Msg:    {commit_msg}")
     print(f"  -> Prompt length: {len(prompt)} chars")
 
-    # Step 2: Switch or create branch in active repository directory
+    # Step 2: Switch or create branch in target repositories
     marker = f"==BRANCH_READY_{int(time.time() * 1000)}=="
-    if is_new:
-        print(f"\n[GIT PUTTY] 1. Fetching origin main and checking out new branch '{branch_name}' in {active_repo_dir}...")
-        git_cmd = (
-            f"cd {active_repo_dir} && "
-            f"git fetch origin main && "
-            f"git checkout -B {branch_name} origin/main && "
-            f"echo '{marker}'"
-        )
-    else:
-        print(f"\n[GIT PUTTY] 1. Switching to existing branch '{branch_name}' in {active_repo_dir}...")
-        git_cmd = (
-            f"cd {active_repo_dir} && "
-            f"git checkout {branch_name} && "
-            f"echo '{marker}'"
-        )
+    dirty_marker = f"==DEV_DIRTY_{int(time.time() * 1000)}=="
 
+    if is_exo:
+        parts = []
+        if has_backend:
+            parts.append(f'cd {config.DEV_REPO_DIR} && [ -z "$(git status --porcelain)" ] || {{ echo \'{dirty_marker}\'; false; }}')
+        for r in repos:
+            if is_new:
+                parts.append(f"cd {r} && git fetch origin main && git checkout -B {branch_name} origin/main")
+            else:
+                parts.append(f"cd {r} && {{ git show-ref -q refs/heads/{branch_name} && git checkout {branch_name} || true; }}")
+        parts.append(f"echo '{marker}'")
+        git_cmd = " && \\\n".join(parts)
+        print(f"\n[GIT PUTTY] 1. Preparing branch '{branch_name}' across repos: {repos}...")
+    else:
+        if is_new:
+            print(f"\n[GIT PUTTY] 1. Fetching origin main and checking out new branch '{branch_name}' in {active_repo_dir}...")
+            git_cmd = (
+                f"cd {active_repo_dir} && "
+                f"git fetch origin main && "
+                f"git checkout -B {branch_name} origin/main && "
+                f"echo '{marker}'"
+            )
+        else:
+            print(f"\n[GIT PUTTY] 1. Switching to existing branch '{branch_name}' in {active_repo_dir}...")
+            git_cmd = (
+                f"cd {active_repo_dir} && "
+                f"git checkout {branch_name} && "
+                f"echo '{marker}'"
+            )
+
+    putty.activate_window(git_hwnd)
+    time.sleep(0.3)
     putty.paste_text(git_hwnd, git_cmd, press_enter=True)
-    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60)
+    ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60, dirty_marker=dirty_marker)
+
+    if ready == "dirty":
+        print(f"\n[GIT PUTTY] 🚨 Branch setup refused: /data/development has uncommitted changes!")
+        telegram_alert.send_telegram_message(
+            f"🚨 *Vnimaniye, Comrade Yoan!* Task `{task_name}` halted: `/data/development` has uncommitted changes!\nRefusing to switch branches to protect your work. 🪆🐻"
+        )
+        return False
+
     if not ready:
         print(f"\n[GIT PUTTY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
-        telegram_alert.send_git_auth_failed_alert(branch_name, active_repo_dir)
+        telegram_alert.send_git_auth_failed_alert(branch_name, str(repos))
         print(f"Please switch to Git PuTTY, provide credentials or checkout branch '{branch_name}' manually.")
 
         last_rem = time.time()
@@ -459,8 +684,9 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
             time.sleep(2.0)
 
-    # Step 3: Position Claude in active repository directory and clear context
-    putty.ensure_claude_directory(claude_hwnd, active_repo_dir, watcher)
+    # Step 3: Position Claude and clear context
+    claude_target_dir = config.EXO_REPO_DIR if is_exo else active_repo_dir
+    putty.ensure_claude_directory(claude_hwnd, claude_target_dir, watcher)
     putty.clear_claude_context(claude_hwnd)
 
     # Step 4: Send Claude prompt
@@ -480,13 +706,30 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
     # Step 6: Commit and push
-    handle_git_push(git_hwnd, branch_name, commit_msg, active_repo_dir)
-    print(f"\n[GIT PUTTY] ✅ Staying on branch '{branch_name}' in {active_repo_dir}.")
+    handle_git_push(git_hwnd, branch_name, commit_msg, repos=repos, is_exo=is_exo, task_name=task_info["task_name"])
+    print(f"\n[GIT PUTTY] ✅ Staying on branch '{branch_name}' in {repos}.")
 
     # Step 7: Move to completed
     completed_file = config.COMPLETED_DIR / task_name
     shutil.move(str(working_file), str(completed_file))
     print(f"\n[SUCCESS] ✅ Task '{task_name}' completed and archived to {completed_file}!\n")
+
+    # Step 7.5: Post-push APK check for EXO tasks
+    if is_exo:
+        apk_url = f"{config.EXO_APK_BASE_URL}{task_info['task_name']}.apk"
+        apk_ok = False
+        try:
+            res = requests.head(apk_url, timeout=10)
+            apk_ok = (res.status_code == 200)
+        except Exception:
+            apk_ok = False
+
+        repos_count = len(repos)
+        repo_desc = f"{repos_count} repos" if repos_count > 1 else "1 repo"
+        if apk_ok:
+            telegram_alert.send_telegram_message(f"✅ `{task_info['task_name']}` done. MR: {repo_desc}. APK: {apk_url}")
+        else:
+            telegram_alert.send_telegram_message(f"⚠️ `{task_info['task_name']}` finished but the APK is missing: {apk_url}")
 
     # Step 8: Usage check
     usage_pct, reset_time, is_over_limit = putty.check_claude_usage(claude_hwnd, threshold=config.USAGE_THRESHOLD)
@@ -515,7 +758,7 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     - Cleans up merged/ folder.
     - Processes re/ then pending/.
     - Recovers orphaned tasks in working/.
-    - When idle, monitors Telegram for 'reproduction', 'takeabreak', and 'godark' commands.
+    - When idle, monitors Telegram for 'reproduction', 'review', 'takeabreak', and 'godark' commands.
     """
     telegram_alert.init_telegram_listener()
 
@@ -588,7 +831,8 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
             has_new = telegram_alert.wait_for_new_task_or_alert(
                 interval_seconds=60,
                 git_hwnd=git_hwnd,
-                reproduction_handler=handle_reproduction
+                reproduction_handler=handle_reproduction,
+                review_handler=handle_review
             )
             if not has_new:
                 break
