@@ -55,6 +55,18 @@ def main():
     # Step 2: Initialize Log Watcher
     watcher = LogWatcher()
 
+    # Step 2.5: Detect Active Working Directory from Git PuTTY & Position Claude
+    detected_dir = putty.detect_git_working_dir(git_hwnd)
+    if detected_dir:
+        config.SERVER_REPO_DIR = detected_dir
+        print(f"\n[RADAR] 🇷🇺 Active working directory detected from Git PuTTY: {detected_dir}")
+    else:
+        print(f"\n[RADAR] ⚠️ Could not detect working directory from Git PuTTY. Using default: {config.SERVER_REPO_DIR}")
+
+    # Position Claude in the detected directory
+    if not args.dry_run:
+        putty.ensure_claude_directory(claude_hwnd, config.SERVER_REPO_DIR, watcher)
+
     if args.dry_run:
         print("\n[DRY RUN] Running in dry-run mode. Checking merged, re, and pending tasks...")
         merged_tasks = list(config.MERGED_DIR.glob("*.txt"))

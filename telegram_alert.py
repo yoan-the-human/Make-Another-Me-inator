@@ -208,17 +208,20 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
             elif cmd == "reproduction":
                 # 1. RESET TIMER IMMEDIATELY ON RECEIPT
                 elapsed = 0
-                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received! Preparing to execute...")
-                send_telegram_message("🔄 *Orders received!* Executing reproduction command in Git PuTTY:\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
-                if git_hwnd and reproduction_handler:
-                    success = reproduction_handler(git_hwnd)
-                    if success:
-                        send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
-                    else:
-                        send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received! Checking applicability...")
+                if "exo-android" in str(config.SERVER_REPO_DIR).lower():
+                    print("[TELEGRAM] ⚠️ Reproduction command skipped: disabled in exo-android.")
+                    send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* Reproduction command is disabled when working in `exo-android` (no reproduction target here)! 🇷🇺")
                 else:
-                    print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
-
+                    send_telegram_message(f"🔄 *Orders received!* Executing reproduction command in Git PuTTY ({config.SERVER_REPO_DIR}):\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
+                    if git_hwnd and reproduction_handler:
+                        success = reproduction_handler(git_hwnd, repo_dir=config.SERVER_REPO_DIR)
+                        if success:
+                            send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
+                        else:
+                            send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                    else:
+                        print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
                 print(f"✅ Reproduction finished.")
 
         # Check if new files appeared in re, pending, working, or a NEW file in merged

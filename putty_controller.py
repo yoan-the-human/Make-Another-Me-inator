@@ -489,6 +489,140 @@ def paste_text(hwnd: int, text: str, press_enter: bool = True, use_mouse: bool =
     return True
 
 
+def detect_git_working_dir(git_hwnd: int, timeout: int = 10) -> str:
+    """
+    Query Git PuTTY for current working directory using `pwd` wrapped in unique markers.
+    Returns cleaned path (e.g. '/data/development' or '/data/exo-android').
+    """
+    uid = f"{int(time.time() * 1000)}"
+    start_marker = f"==DIR_START_{uid}=="
+    end_marker = f"==DIR_END_{uid}=="
+    cmd = f"echo '{start_marker}' ; pwd ; echo '{end_marker}'"
+
+    activate_window(git_hwnd)
+    time.sleep(0.2)
+    paste_text(git_hwnd, cmd, press_enter=True)
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        screen = capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+
+        start_idx = -1
+        end_idx = -1
+        for idx, line in enumerate(lines):
+            # Ignore echo command itself or compound lines
+            if line.startswith("echo ") or " ; echo " in line or "pwd ;" in line:
+                continue
+            if start_marker in line:
+                start_idx = idx
+            elif end_marker in line and start_idx != -1:
+                end_idx = idx
+                break
+
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            for i in range(start_idx + 1, end_idx):
+                cand = lines[i].strip().strip("'\"")
+                if cand.startswith("/") and " " not in cand and "@" not in cand:
+                    clean_cand = cand.rstrip("/")
+                    return clean_cand
+        time.sleep(0.3)
+
+    return ""
+
+
+def ensure_claude_directory(claude_hwnd: int, target_dir: str, watcher=None, timeout: int = 20) -> bool:
+    """
+    Ensure Claude Code is working in target_dir using `/cd <target_dir>`.
+    Handles directory trust prompt if it appears.
+    If Claude is not running yet (at shell prompt), starts Claude in target_dir via `cd <target_dir> && claude`.
+    """
+    if not target_dir:
+        return False
+
+    print(f"\n[CLAUDE PUTTY] 🧭 Positioning Claude in working directory: {target_dir}...")
+    activate_window(claude_hwnd)
+    time.sleep(0.2)
+
+    screen = capture_screen_text(claude_hwnd)
+    lines = [l.strip() for l in screen.splitlines() if l.strip()]
+    recent = lines[-10:] if lines else []
+    is_claude_running = any("❯" in l for l in recent)
+
+    if not is_claude_running:
+        # Claude is at bash prompt! Send cd <target_dir> && claude
+        print(f"[CLAUDE PUTTY] Shell prompt detected (Claude not running). Navigating and starting Claude...")
+        cmd = f"cd {target_dir} && claude"
+        paste_text(claude_hwnd, cmd, press_enter=True)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            s = capture_screen_text(claude_hwnd)
+            s_lines = [l.strip() for l in s.splitlines() if l.strip()]
+            if any("❯" in l for l in s_lines[-10:]):
+                print(f"[CLAUDE PUTTY] ✅ Claude started and positioned in '{target_dir}'!")
+                return True
+            time.sleep(0.5)
+        return True
+
+    # Claude Code CLI is running! Clear line if unsubmitted text
+    prompt_line = next((l for l in reversed(recent) if "❯" in l), "")
+    clean_p = prompt_line.replace("\xa0", " ").strip()
+    if clean_p and clean_p != "❯":
+        send_escape(claude_hwnd)
+        time.sleep(0.2)
+
+    # Paste /cd <target_dir>
+    cmd = f"/cd {target_dir}"
+    paste_text(claude_hwnd, cmd, press_enter=True)
+    time.sleep(1.0)
+
+    # Check if trust prompt appears
+    print("[CLAUDE PUTTY] 🔍 Checking for directory trust prompt...")
+    has_trust = False
+    if watcher and hasattr(watcher, "wait_for_trust_prompt"):
+        has_trust = watcher.wait_for_trust_prompt(timeout=6, claude_hwnd=claude_hwnd)
+    else:
+        trust_patterns = [
+            "this session hasn't worked here before",
+            "is this a directory you created",
+            "no, stay put",
+            "yes, move here"
+        ]
+        t_start = time.time()
+        while time.time() - t_start < 6:
+            s_text = capture_screen_text(claude_hwnd).lower()
+            if any(p in s_text for p in trust_patterns):
+                has_trust = True
+                break
+            time.sleep(0.5)
+
+    if has_trust:
+        print("[CLAUDE PUTTY] ⚠️ Detected directory trust prompt! Selecting 'Yes, move here' (Down Arrow + Enter)...")
+        time.sleep(0.5)
+        send_down_arrow(claude_hwnd)
+        time.sleep(0.3)
+        send_enter(claude_hwnd)
+        time.sleep(1.5)
+    else:
+        print("[CLAUDE PUTTY] ✅ No trust prompt detected (or directory already trusted).")
+
+    # Wait for clean prompt '❯'
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        screen = capture_screen_text(claude_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent = lines[-10:]
+        prompt_line = next((l for l in reversed(recent) if "❯" in l), "")
+        clean_prompt = prompt_line.replace("\xa0", " ").strip()
+        if clean_prompt == "❯":
+            print(f"[CLAUDE PUTTY] ✅ Claude successfully positioned in '{target_dir}'!")
+            time.sleep(0.5)
+            return True
+        time.sleep(0.5)
+
+    print(f"[CLAUDE PUTTY] ⚠️ Proceeding after /cd {target_dir}.")
+    return True
+
 
 def get_window_title(hwnd: int) -> str:
     try:

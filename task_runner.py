@@ -210,23 +210,29 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repo_dir: 
 
         time.sleep(2.0)
 
-def handle_reproduction(git_hwnd: int) -> bool:
+def handle_reproduction(git_hwnd: int, repo_dir: str = None) -> bool:
     """
     Executes 'git fetch origin main && git -C ../haskovo.net pull origin main' in Git PuTTY.
     Dynamically listens and fills username and password prompts (which may occur multiple times).
+    Disabled when working in exo-android!
     """
+    target_dir = repo_dir or config.SERVER_REPO_DIR
+    if "exo-android" in str(target_dir).lower():
+        print(f"\n[REPRODUCTION] ⚠️ Reproduction command is disabled for '{target_dir}'! Doing nothing.")
+        return False
+
     uid = f"{int(time.time() * 1000)}_{os.getpid()}"
     ok_marker = f"==REPRO_OK_{uid}=="
     fail_marker = f"==REPRO_FAIL_{uid}=="
 
     repro_cmd = (
-        f"cd {config.SERVER_REPO_DIR} && "
+        f"cd {target_dir} && "
         f"git fetch origin main && git -C ../haskovo.net pull origin main ; "
         f"REPRO_RC=$? ; "
         f"if [ $REPRO_RC -eq 0 ]; then echo '{ok_marker}' ; else echo '{fail_marker}' ; fi"
     )
 
-    print(f"\n[REPRODUCTION] 🚀 Pasting reproduction command into Git PuTTY...")
+    print(f"\n[REPRODUCTION] 🚀 Pasting reproduction command into Git PuTTY ({target_dir})...")
     putty.activate_window(git_hwnd)
     time.sleep(0.3)
     putty.paste_text(git_hwnd, repro_cmd, press_enter=True)
@@ -292,9 +298,10 @@ def handle_reproduction(git_hwnd: int) -> bool:
     print("[REPRODUCTION] ⚠️ Reproduction command timed out after 240 seconds!")
     return False
 
-def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
+def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path, repo_dir: str = None) -> bool:
     """Process a file in tasks/merged/: delete branch if not active, archive task."""
     task_name = task_file.name
+    target_dir = repo_dir or config.SERVER_REPO_DIR
     try:
         task_info = parse_task_file(task_file, is_new_branch=False)
         branch_name = task_info["branch_name"]
@@ -307,7 +314,7 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
     deleted_marker = f"==BRANCH_DELETED_{uid}=="
 
     check_cmd = (
-        f"cd {config.SERVER_REPO_DIR} && "
+        f"cd {target_dir} && "
         f"CUR_B=$(git branch --show-current) ; "
         f"if [ \"$CUR_B\" = \"{branch_name}\" ]; then "
         f"echo '{active_marker}' ; "
@@ -317,7 +324,7 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
         f"fi"
     )
 
-    print(f"\n[MERGED QUEUE] 🧹 Checking branch '{branch_name}' from '{task_name}' in {config.SERVER_REPO_DIR}...")
+    print(f"\n[MERGED QUEUE] 🧹 Checking branch '{branch_name}' from '{task_name}' in {target_dir}...")
     putty.paste_text(git_hwnd, check_cmd, press_enter=True)
 
     start_time = time.time()
@@ -355,14 +362,19 @@ def handle_merged_branch_cleanup(git_hwnd: int, task_file: Path) -> bool:
     return False
 
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
-    """Execute full workflow for a single task directly in /data/development."""
+    """Execute full workflow for a single task directly in detected repository directory."""
     telegram_alert.set_dark_mode(False)
     task_name = task_file.name
     origin_parent = task_file.parent.name.lower()
     is_from_pending = (origin_parent == "pending")
 
+    # Step 0: Detect active working directory from Git PuTTY
+    active_repo_dir = putty.detect_git_working_dir(git_hwnd) or config.SERVER_REPO_DIR
+    config.SERVER_REPO_DIR = active_repo_dir
+
     print(f"\n=======================================================")
     print(f"🚀 STARTING TASK: {task_name}")
+    print(f"📍 ACTIVE REPOSITORY: {active_repo_dir}")
     print(f"=======================================================")
     
     # Step 1: Move to working folder
@@ -380,26 +392,31 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     is_new = task_info["is_new_branch"]
     commit_msg = task_info["commit_message"].replace('"', '\\"')
     prompt = task_info["prompt"]
+
+    # Adapt prompt if it specifies 'development folder' but working in another folder
+    folder_name = Path(active_repo_dir).name
+    if folder_name.lower() != "development" and "development folder" in prompt.lower():
+        prompt = re.sub(r'development\s+folder', f'{folder_name} folder', prompt, flags=re.IGNORECASE)
     
-    print(f"  -> Repository:    {config.SERVER_REPO_DIR}")
+    print(f"  -> Repository:    {active_repo_dir}")
     print(f"  -> Branch:        {branch_name} ({'NEW branch off origin/main' if is_new else 'EXISTING branch'})")
     print(f"  -> Commit Msg:    {commit_msg}")
     print(f"  -> Prompt length: {len(prompt)} chars")
 
-    # Step 2: Switch or create branch in /data/development
+    # Step 2: Switch or create branch in active repository directory
     marker = f"==BRANCH_READY_{int(time.time() * 1000)}=="
     if is_new:
-        print(f"\n[GIT PUTTY] 1. Fetching origin main and checking out new branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        print(f"\n[GIT PUTTY] 1. Fetching origin main and checking out new branch '{branch_name}' in {active_repo_dir}...")
         git_cmd = (
-            f"cd {config.SERVER_REPO_DIR} && "
+            f"cd {active_repo_dir} && "
             f"git fetch origin main && "
             f"git checkout -B {branch_name} origin/main && "
             f"echo '{marker}'"
         )
     else:
-        print(f"\n[GIT PUTTY] 1. Switching to existing branch '{branch_name}' in {config.SERVER_REPO_DIR}...")
+        print(f"\n[GIT PUTTY] 1. Switching to existing branch '{branch_name}' in {active_repo_dir}...")
         git_cmd = (
-            f"cd {config.SERVER_REPO_DIR} && "
+            f"cd {active_repo_dir} && "
             f"git checkout {branch_name} && "
             f"echo '{marker}'"
         )
@@ -408,7 +425,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     ready = putty.wait_for_git_branch(git_hwnd, branch_name, marker=marker, timeout=60)
     if not ready:
         print(f"\n[GIT PUTTY] 🚨 Branch setup/fetch failed or halted for '{branch_name}'!")
-        telegram_alert.send_git_auth_failed_alert(branch_name, config.SERVER_REPO_DIR)
+        telegram_alert.send_git_auth_failed_alert(branch_name, active_repo_dir)
         print(f"Please switch to Git PuTTY, provide credentials or checkout branch '{branch_name}' manually.")
 
         last_rem = time.time()
@@ -442,7 +459,8 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
 
             time.sleep(2.0)
 
-    # Step 3: Clear Claude context
+    # Step 3: Position Claude in active repository directory and clear context
+    putty.ensure_claude_directory(claude_hwnd, active_repo_dir, watcher)
     putty.clear_claude_context(claude_hwnd)
 
     # Step 4: Send Claude prompt
@@ -462,8 +480,8 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
         print("[WARNING] Claude did not finish cleanly or reached timeout! Proceeding with git check...")
 
     # Step 6: Commit and push
-    handle_git_push(git_hwnd, branch_name, commit_msg, config.SERVER_REPO_DIR)
-    print(f"\n[GIT PUTTY] ✅ Staying on branch '{branch_name}' in {config.SERVER_REPO_DIR}.")
+    handle_git_push(git_hwnd, branch_name, commit_msg, active_repo_dir)
+    print(f"\n[GIT PUTTY] ✅ Staying on branch '{branch_name}' in {active_repo_dir}.")
 
     # Step 7: Move to completed
     completed_file = config.COMPLETED_DIR / task_name
@@ -505,8 +523,11 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
         # Priority 0: Clean up merged branches first!
         merged_files = sorted(list(config.MERGED_DIR.glob("*.txt")))
         if merged_files:
+            detected_dir = putty.detect_git_working_dir(git_hwnd)
+            if detected_dir:
+                config.SERVER_REPO_DIR = detected_dir
             for m_file in merged_files:
-                handle_merged_branch_cleanup(git_hwnd, m_file)
+                handle_merged_branch_cleanup(git_hwnd, m_file, config.SERVER_REPO_DIR)
                 time.sleep(0.5)
 
         re_files = sorted(list(config.RE_DIR.glob("*.txt")))
