@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v2.0.1...v2.1.0) (2026-10-21)
+
+
+### 🚀 New
+
+* new command keepgoing when the quota is at 80% + message when the quota is reset ([a7c5299](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/a7c5299c61f5bc85dad4768dffee019ba8ac2b89))
+
 ### [2.0.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v2.0.0...v2.0.1) (2026-10-21)
 
 
