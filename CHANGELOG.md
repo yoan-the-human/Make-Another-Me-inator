@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [2.0.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v2.0.0...v2.0.1) (2026-10-21)
+
+
+### ⚡ Improvements
+
+* now the part of the script checking the merge folder doesnt disrupt workflow every minute, /godark command doesnt spam the terminal ([4f5aa7c](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/4f5aa7cfef60afe2fcb641d0b716ff9ea574adb8))
+
 ## [2.0.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v1.3.0...v2.0.0) (2026-10-13)
 
 
