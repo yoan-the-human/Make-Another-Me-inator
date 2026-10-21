@@ -78,7 +78,7 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
         "prompt": prompt,
         "task_name": file_path.stem,
         "is_exo": "/data/exo-android" in prompt,
-        "has_backend": re.search(r"^(?:Backend(?:\s+API)?|Laravel(?:\s+API)?):", prompt, re.M | re.IGNORECASE) is not None
+        "has_backend": re.search(r"^\s*(?:#+\s*)?(?:Backend|Laravel)\b.*:", prompt, re.M | re.IGNORECASE) is not None
     }
 
 def task_repos(info: dict) -> list[str]:
@@ -660,7 +660,7 @@ def handle_reapk(git_hwnd: int, args: list[str] = None) -> bool:
     telegram_alert.send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* Building APK of `main` timed out after 6 minutes. Check Git PuTTY!")
     return False
 
-def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
+def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher, is_quota_retry: bool = False) -> bool:
     """Execute full workflow for a single task directly in detected repository directory."""
     telegram_alert.set_dark_mode(False)
     task_name = task_file.name
@@ -862,7 +862,7 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     putty.clear_claude_context(claude_hwnd, session_name=session_name)
 
     if is_over_limit:
-        telegram_alert.send_quota_alert(usage_pct, reset_time)
+        telegram_alert.send_quota_alert(usage_pct, reset_time, is_repeat=is_quota_retry)
         raise QuotaLimitExceeded(usage_pct, reset_time)
 
     return True
@@ -879,14 +879,19 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     - Cleans up merged/ folder.
     - Processes re/ then pending/.
     - Recovers orphaned tasks in working/.
+    - Halts task starting when quota reaches 80%+, keeps script alive, and waits for /keepgoing.
     - When idle, monitors Telegram for 'reproduction', 'review', 'takeabreak', and 'godark' commands.
     """
     telegram_alert.init_telegram_listener()
 
     last_merged_state = {}
+    quota_paused = False
+    quota_usage_pct = 0.0
+    quota_reset_time = ""
+    quota_one_shot = False
 
-    while True:
-        # Priority 0: Clean up merged branches when new or updated files appear in merged/
+    def clean_merged_if_needed():
+        nonlocal last_merged_state
         curr_merged_state = config.get_merged_snapshot()
         has_new_merged = any(
             name not in last_merged_state or mtime > last_merged_state[name]
@@ -906,6 +911,27 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
             last_merged_state = config.get_merged_snapshot()
         else:
             last_merged_state = {k: v for k, v in last_merged_state.items() if k in curr_merged_state}
+
+    while True:
+        # Priority 0: Clean up merged branches when new or updated files appear in merged/
+        clean_merged_if_needed()
+
+        # If quota is at 80%+, halt task starting and wait for /keepgoing command or quota reset
+        if quota_paused and not quota_one_shot:
+            allowed = telegram_alert.wait_for_quota_pause(
+                usage_pct=quota_usage_pct,
+                reset_time=quota_reset_time,
+                claude_hwnd=claude_hwnd,
+                git_hwnd=git_hwnd,
+                reproduction_handler=handle_reproduction,
+                review_handler=handle_review,
+                reapk_handler=handle_reapk,
+                merged_handler=clean_merged_if_needed,
+                interval_seconds=getattr(config, "CLAUDE_POLL_INTERVAL", 120)
+            )
+            if not allowed:
+                break
+            quota_one_shot = True
 
         re_files = sorted(list(config.RE_DIR.glob("*.txt")))
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
@@ -942,16 +968,28 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
             print(f"[QUEUE] ⏳ Selecting task from PENDING folder: '{task_file.name}' (Remaining in pending: {len(pending_files)})")
             
         if task_file:
+            was_quota_retry = quota_paused and quota_one_shot
+            quota_one_shot = False
+
             try:
-                success = process_single_task(task_file, git_hwnd, claude_hwnd, watcher)
+                success = process_single_task(task_file, git_hwnd, claude_hwnd, watcher, is_quota_retry=was_quota_retry)
                 if not success:
                     print(f"[ERROR] Task '{task_file.name}' did not complete successfully.")
+                else:
+                    if quota_paused:
+                        print(f"[QUOTA] 🎉 Session quota is now below threshold! Resuming normal automation pipeline.")
+                        quota_paused = False
+                        telegram_alert.send_quota_cleared_notification(quota_usage_pct)
             except QuotaLimitExceeded as qe:
-                print(f"\n[STOPPING] 🛑 Claude session quota is at {qe.usage_pct}% (>= {config.USAGE_THRESHOLD}%)!")
-                print(f"[STOPPING] Telegram alert dispatched. Halting automation pipeline now, tovarisch!\n")
-                break
+                print(f"\n[QUOTA PAUSE] 🛑 Claude session quota is at {qe.usage_pct}% (>= {config.USAGE_THRESHOLD}%)!")
+                print(f"[QUOTA PAUSE] Task starting halted. Script remains alive in bunker waiting for /keepgoing.\n")
+                quota_paused = True
+                quota_usage_pct = qe.usage_pct
+                quota_reset_time = qe.reset_time
+                quota_one_shot = False
             except Exception as e:
                 print(f"[ERROR] Exception during task execution: {e}")
+                quota_one_shot = False
                 working_target = config.WORKING_DIR / task_file.name
                 if working_target.exists():
                     fallback_dir = origin_dir if origin_dir else config.PENDING_DIR

@@ -129,14 +129,16 @@ You can message your Telegram bot directly while the script is idling:
 | `reapk` or `/reapk [name]` | Fetches latest `main` in `/data/exo-android`, runs `./gradlew assembleDebug`, copies the APK to `/mnt/nvme/exo-apks/exo.apk` (or custom name, served at `https://development.haskovo.net/exo/exo.apk`), checks HTTP status, and sends direct download link to Telegram. Resets the 2-minute idle timer. |
 | `reproduction` or `/reproduction` | Runs `cd /data/development && git fetch origin main && git -C ../haskovo.net pull origin main` in Git PuTTY. Automatically handles multiple username/password prompts. Always targets `/data/development` (even for EXO tasks). **Immediately resets the 2-minute idle timer**. |
 | `takeabreak` or `/takeabreak` | Safely stops the automation pipeline immediately, simulating a clean `Ctrl+C` interrupt. |
-| `godark` or `/godark` | Silences periodic queue idle reminders without stopping the automation process. Automatically resumes normal communications when a new job starts in `pending/` or `re/`. |
-| `golight` or `/golight` | Restores periodic queue idle reminders manually if needed. |
+| `keepgoing` or `/keepgoing` | When quota is paused (80%+ threshold reached), orders the pipeline to execute ONE task, then halt and wait again for your command. |
+| `quota` or `/quota` | Queries Claude PuTTY live for current session quota percentage and reset time. |
+| `godark` or `/godark` | Silences periodic queue idle & quota reminders without stopping the automation process. Automatically resumes normal communications when a new job starts in `pending/` or `re/`. |
+| `golight` or `/golight` | Restores periodic queue idle & quota reminders manually if needed. |
 
 ### Automated Bot Notifications:
 - **❓ Claude Question Alert**: Claude asks for an interactive decision, file permission, or tool approval. The bot sends a preview of the question to your phone.
 - **🚀 Answer Detected**: Bot notifies you as soon as you answer in Claude PuTTY and generation resumes.
 - **🚨 Git Push / Auth Failure**: Alerts if git authentication fails. The script stands guard waiting for manual push confirmation before continuing.
-- **📊 Quota Protection**: When `/usage` exceeds `USAGE_THRESHOLD` (default 80%), the bot notifies you with quota reset time and halts the pipeline to avoid lockouts.
+- **📊 Quota Protection & Reminders**: When `/usage` exceeds `USAGE_THRESHOLD` (default 80%), the script halts task starting without stopping the process. It sends an alert with reset time, sends a reminder when the quota reset time is active, and sends periodic reminders (silenced by `/godark`). You can send `/keepgoing` to execute one more task and halt again.
 - **📢 Queue Idle Reminders**: Sends a reminder every 2 minutes when all task queues are empty.
 
 ---

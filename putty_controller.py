@@ -384,12 +384,18 @@ def parse_current_session_usage(screen_text: str) -> tuple[float | None, str]:
     # Extract reset time if available
     reset_time = ""
     reset_matches = list(re.finditer(
-        r'Current\s+session.*?Resets\s+([^\n\r]+)',
+        r'Current\s+session.*?Resets(?:\s+at|:)?\s+([^\n\r]+)',
         screen_text,
         re.IGNORECASE | re.DOTALL
     ))
     if reset_matches:
-        reset_time = reset_matches[-1].group(1).strip()
+        raw_reset = reset_matches[-1].group(1).strip()
+        reset_time = re.sub(r'[\s│|─\-_]+$', '', raw_reset).strip()
+    elif "resets" in screen_text.lower():
+        fallback_m = re.search(r'Resets(?:\s+at|:)?\s+([^\n\r]+)', screen_text, re.IGNORECASE)
+        if fallback_m:
+            raw_reset = fallback_m.group(1).strip()
+            reset_time = re.sub(r'[\s│|─\-_]+$', '', raw_reset).strip()
 
     return pct, reset_time
 

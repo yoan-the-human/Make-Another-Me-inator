@@ -1,5 +1,7 @@
 import sys
 import time
+import re
+import datetime
 import requests
 from pathlib import Path
 
@@ -113,12 +115,117 @@ def check_telegram_commands() -> list[tuple[str, list[str]]]:
         pass
     return commands
 
-def send_quota_alert(usage_pct: float, reset_time: str = "") -> bool:
+def parse_reset_timestamp(reset_str: str, now: float = None) -> float | None:
+    """
+    Parse a reset time string from Claude Code into a target epoch timestamp.
+    Examples: '10pm (in 1h 24m)', '2am (in 3h)', 'in 45m', '10:30 PM', 'tomorrow at 3am'
+    """
+    if not reset_str:
+        return None
+    if now is None:
+        now = time.time()
+    s = reset_str.lower().strip()
+    
+    in_idx = s.find("in ")
+    if in_idx != -1:
+        in_part = s[in_idx:]
+        h_m = re.search(r'(\d+)\s*(?:h\b|hr|hours?)', in_part)
+        m_m = re.search(r'(\d+)\s*(?:m\b|min|minutes?)', in_part)
+        if h_m or m_m:
+            h = int(h_m.group(1)) if h_m else 0
+            m = int(m_m.group(1)) if m_m else 0
+            total_seconds = h * 3600 + m * 60
+            if total_seconds >= 0:
+                return now + total_seconds
+
+    clock_match = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b', s)
+    if clock_match and (clock_match.group(2) or clock_match.group(3)):
+        hour = int(clock_match.group(1))
+        minute = int(clock_match.group(2)) if clock_match.group(2) else 0
+        meridiem = clock_match.group(3)
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+        dt_now = datetime.datetime.fromtimestamp(now)
+        dt_target = dt_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if "tomorrow" in s or dt_target.timestamp() <= now:
+            dt_target += datetime.timedelta(days=1)
+        return dt_target.timestamp()
+    return None
+
+def send_quota_alert(usage_pct: float, reset_time: str = "", is_repeat: bool = False) -> bool:
     """Alert user via Telegram that Claude session quota reached or exceeded threshold."""
-    msg = f"⚠️ *Vnimaniye, Comrade Yoan!*\n\nClaude session usage has reached *{usage_pct:.1f}%* (threshold is {config.USAGE_THRESHOLD:.0f}%)!"
-    if reset_time:
-        msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
-    msg += "\n\n🛑 Automated pipeline is halting all tasks to protect your quota from hitting the wall.\nRest by the samovar, drink vodka, and wait for reset, tovarisch! 🪆🐻"
+    if is_repeat:
+        msg = (
+            f"🛑 *Task completed, Comrade Yoan!*\n\n"
+            f"Halting task starting again as ordered.\n"
+            f"Claude session usage is still *{usage_pct:.1f}%* (threshold is {config.USAGE_THRESHOLD:.0f}%)."
+        )
+        if reset_time:
+            msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
+        msg += (
+            f"\n\n🛑 Pipeline remains alive in bunker.\n"
+            f"Send `/keepgoing` when ready to do one more task, tovarisch! 🪆🐻"
+        )
+    else:
+        msg = (
+            f"⚠️ *Vnimaniye, Comrade Yoan!*\n\n"
+            f"Claude session usage has reached *{usage_pct:.1f}%* (threshold is {config.USAGE_THRESHOLD:.0f}%)!"
+        )
+        if reset_time:
+            msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
+        msg += (
+            f"\n\n🛑 Automated task starting is halted to protect your quota from hitting the wall.\n"
+            f"The script continues to work and is waiting for your `/keepgoing` command.\n"
+            f"Send `/keepgoing` to execute one more task, tovarisch! 🪆🐻"
+        )
+    return send_telegram_message(msg)
+
+def send_quota_reset_reminder(reset_time: str = "") -> bool:
+    """Milestone reminder when the quota reset time arrives/becomes active."""
+    time_str = f" (`{reset_time}`)" if reset_time else ""
+    msg = (
+        f"⏰ *Vnimaniye, Comrade Yoan! Quota reset time is ACTIVE!*\n\n"
+        f"The quota reset window{time_str} has arrived! ☭\n\n"
+        f"You can now send `/keepgoing` to continue processing tasks from the queue, tovarisch! 🪆🚀"
+    )
+    return send_telegram_message(msg)
+
+def send_quota_pause_reminder(usage_pct: float, reset_time: str = "", reset_active: bool = False) -> bool:
+    """Periodic reminder that task starting is paused waiting for quota reset or /keepgoing."""
+    if reset_active:
+        msg = (
+            f"⏳ *Reminder, Comrade Yoan!* Quota reset window is active!\n"
+            f"Machine is standing by in the bunker waiting for your `/keepgoing` command to do a task! 🪆🚀"
+        )
+    else:
+        msg = (
+            f"⏳ *Reminder, Comrade Yoan!* Task starting is paused.\n"
+            f"Claude session quota is at *{usage_pct:.1f}%* (threshold: {config.USAGE_THRESHOLD:.0f}%)."
+        )
+        if reset_time:
+            msg += f"\n⏳ *Quota resets at:* `{reset_time}`"
+        msg += (
+            f"\n\nSend `/keepgoing` when you want me to do one more task, or wait for reset, tovarisch! 🪆🐻"
+        )
+    return send_telegram_message(msg)
+
+def send_keepgoing_ack(task_name: str = "") -> bool:
+    """Acknowledge /keepgoing command from user."""
+    if task_name:
+        msg = f"🚀 *Orders received, Comrade Yoan!* Order `/keepgoing` confirmed! Starting task `{task_name}`! ☭"
+    else:
+        msg = f"🚀 *Orders received, Comrade Yoan!* Order `/keepgoing` confirmed! Starting ONE task from queue! ☭"
+    return send_telegram_message(msg)
+
+def send_quota_cleared_notification(usage_pct: float) -> bool:
+    """Notify user that session quota is now below threshold and normal queue resumed."""
+    msg = (
+        f"🎉 *Slava! Comrade Yoan!* Quota has reset!\n\n"
+        f"Current Claude session usage is *{usage_pct:.1f}%* (< {config.USAGE_THRESHOLD:.0f}% threshold).\n"
+        f"Quota restrictions lifted — full automated pipeline resumed, tovarisch! 🚀☭"
+    )
     return send_telegram_message(msg)
 
 def send_question_alert(question_text: str) -> bool:
@@ -246,6 +353,11 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 else:
                     print("[TELEGRAM] ⚠️ No reapk handler provided.")
 
+            elif cmd in ["keepgoing", "keep_going", "continue", "next"]:
+                elapsed = 0
+                print(f"\n[TELEGRAM] 🚀 Command '{cmd}' received while queue is empty.")
+                send_telegram_message("⚠️ *Comrade Yoan!* Order `/keepgoing` received, but queues (`re` and `pending`) are empty!\nStanding by: as soon as a task appears, it will execute! 🪆🐻")
+
         # Check if new files appeared in re, pending, working, or a NEW / updated file in merged
         curr_re = list(config.RE_DIR.glob("*.txt"))
         curr_pending = list(config.PENDING_DIR.glob("*.txt"))
@@ -282,6 +394,146 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 else:
                     send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
             elapsed = 0
+
+def wait_for_quota_pause(
+    usage_pct: float,
+    reset_time: str = "",
+    claude_hwnd: int = None,
+    git_hwnd: int = None,
+    reproduction_handler=None,
+    review_handler=None,
+    reapk_handler=None,
+    merged_handler=None,
+    interval_seconds: int = 120
+) -> bool:
+    """
+    Called when Claude session quota reaches or exceeds USAGE_THRESHOLD (80%+).
+    - Stops new task execution, but keeps the script running.
+    - Handles merged branch cleanups if files are dropped into merged/.
+    - Sends a reminder notification when the quota reset time arrives/becomes active.
+    - Sends periodic reminders (suppressed by /godark).
+    - Listens for /keepgoing (orders ONE task to execute).
+    - Listens for other control commands (takeabreak, godark, golight, reproduction, review, reapk, quota/usage).
+    """
+    global _is_dark
+
+    reset_timestamp = parse_reset_timestamp(reset_time)
+    reset_notified = False
+
+    if reset_timestamp and time.time() >= reset_timestamp:
+        reset_notified = True
+        send_quota_reset_reminder(reset_time)
+
+    print(f"\n[QUOTA PAUSE] 🛑 Task starting halted: Claude session quota is {usage_pct:.1f}% (threshold {config.USAGE_THRESHOLD:.0f}%).")
+    if reset_time:
+        print(f"[QUOTA PAUSE] ⏳ Quota resets at: {reset_time}")
+    print(f"[QUOTA PAUSE] 🪆 Standing guard in bunker. Waiting for user command (/keepgoing)...")
+
+    elapsed = 0
+    while True:
+        # 1. Check for Telegram commands from user
+        cmds = check_telegram_commands()
+        for cmd, args in cmds:
+            if cmd in ["takeabreak", "break", "stop", "exit"]:
+                print(f"\n[TELEGRAM] 🛑 Command '{cmd}' received! Shutting down pipeline cleanly...")
+                send_telegram_message("🛑 *Comrade Yoan! Order 'takeabreak' received!*\nExiting automation pipeline cleanly. Samovar is cooling down, tovarisch! 🪆🐻")
+                raise KeyboardInterrupt("Telegram command 'takeabreak' received.")
+
+            elif cmd in ["godark", "go_dark", "dark"]:
+                _is_dark = True
+                print(f"\n[TELEGRAM] 🤫 Command '{cmd}' received! Going dark - periodic quota reminders silenced...")
+                send_telegram_message("🤫 *Orders received! Going dark, Comrade Yoan!* Periodic quota reminders silenced. Process remains on watch in the bunker and will alert when reset time arrives or upon /keepgoing! 🥷🪆")
+
+            elif cmd in ["golight", "go_light", "light", "loud", "nodark"]:
+                _is_dark = False
+                print(f"\n[TELEGRAM] 📢 Command '{cmd}' received! Resuming periodic reminders...")
+                send_telegram_message("📢 *Orders received! Normal communication restored, Comrade Yoan!* Reminders enabled. 🪆☭")
+
+            elif cmd in ["keepgoing", "keep_going", "continue", "next"]:
+                elapsed = 0
+                print(f"\n[TELEGRAM] 🚀 Command '/keepgoing' received from Comrade Yoan! Allowing ONE task to proceed...")
+                send_keepgoing_ack()
+                return True
+
+            elif cmd in ["quota", "usage"]:
+                elapsed = 0
+                print(f"\n[TELEGRAM] 📊 Command '{cmd}' received! Checking live Claude quota...")
+                if claude_hwnd:
+                    try:
+                        import putty_controller as putty
+                        cur_pct, cur_reset, cur_over = putty.check_claude_usage(claude_hwnd)
+                        if cur_pct is not None:
+                            usage_pct = cur_pct
+                            if cur_reset:
+                                reset_time = cur_reset
+                                reset_timestamp = parse_reset_timestamp(reset_time)
+                            status_msg = f"📊 *Claude Quota Status:*\nCurrent session usage: *{cur_pct:.1f}%* (threshold: {config.USAGE_THRESHOLD:.0f}%)"
+                            if cur_reset:
+                                status_msg += f"\n⏳ *Resets at:* `{cur_reset}`"
+                            if not cur_over:
+                                status_msg += f"\n\n🎉 Quota is below threshold! You can send `/keepgoing` to resume tasks!"
+                            else:
+                                status_msg += f"\n\n🛑 Quota limit still exceeded. Send `/keepgoing` to run one task anyway."
+                            send_telegram_message(status_msg)
+                        else:
+                            send_telegram_message(f"⚠️ Could not read current usage from Claude terminal. Last known: {usage_pct:.1f}%")
+                    except Exception as e:
+                        send_telegram_message(f"⚠️ Error checking usage: {e}")
+                else:
+                    send_telegram_message(f"📊 Last known usage: {usage_pct:.1f}%. Resets: `{reset_time}`")
+
+            elif cmd == "reproduction":
+                elapsed = 0
+                print(f"\n[TELEGRAM] 🔄 Command 'reproduction' received in quota pause!")
+                send_telegram_message(f"🔄 *Orders received!* Executing reproduction command in Git PuTTY ({config.DEV_REPO_DIR}):\n`git fetch origin main && git -C ../haskovo.net pull origin main`")
+                if git_hwnd and reproduction_handler:
+                    success = reproduction_handler(git_hwnd, repo_dir=config.DEV_REPO_DIR)
+                    if success:
+                        send_telegram_message("✅ *Spasibo, Comrade Yoan!* Reproduction command executed successfully! 🚀☭")
+                    else:
+                        send_telegram_message("⚠️ *Vnimaniye!* Reproduction command failed or timed out. Please check Git PuTTY!")
+                else:
+                    print("[TELEGRAM] ⚠️ No Git PuTTY window handle or handler provided for reproduction.")
+
+            elif cmd == "review":
+                elapsed = 0
+                print(f"\n[TELEGRAM] 📱 Command 'review' received with args: {args}")
+                if review_handler:
+                    review_handler(git_hwnd, args)
+                else:
+                    print("[TELEGRAM] ⚠️ No review handler provided.")
+
+            elif cmd in ["reapk", "apk"]:
+                elapsed = 0
+                print(f"\n[TELEGRAM] 📱 Command '{cmd}' received with args: {args}")
+                send_telegram_message("📱 *Orders received!* Building debug APK from `main` branch of `exo-android` in Git PuTTY... ⏳")
+                if reapk_handler:
+                    reapk_handler(git_hwnd, args)
+                else:
+                    print("[TELEGRAM] ⚠️ No reapk handler provided.")
+
+        # 2. Check merged directory for cleanups
+        if merged_handler:
+            try:
+                merged_handler()
+            except Exception as e:
+                print(f"[QUOTA PAUSE] Error in merged handler: {e}")
+
+        # 3. Check milestone: Has quota reset time arrived?
+        if reset_timestamp and not reset_notified:
+            if time.time() >= reset_timestamp:
+                reset_notified = True
+                print(f"\n[QUOTA PAUSE] ⏰ Quota reset time reached (`{reset_time}`)! Alerting Comrade Yoan...")
+                send_quota_reset_reminder(reset_time)
+                elapsed = 0
+
+        # 4. Periodic reminder
+        time.sleep(1)
+        elapsed += 1
+        if elapsed >= interval_seconds:
+            elapsed = 0
+            if not _is_dark:
+                send_quota_pause_reminder(usage_pct, reset_time, reset_active=reset_notified)
 
 if __name__ == "__main__":
     print("Testing Telegram connection...")
