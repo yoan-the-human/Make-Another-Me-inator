@@ -156,13 +156,14 @@ def send_git_push_confirmed_notification(branch_name: str) -> bool:
     msg = f"✅ *Spasibo, Comrade Yoan!* Git push confirmed for `{branch_name}`! Resuming pipeline! 🚀☭"
     return send_telegram_message(msg)
 
-def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None, review_handler=None):
+def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: int = None, reproduction_handler=None, review_handler=None, reapk_handler=None):
     """
     Called when re, pending, and working folders are empty.
-    - Polls for user Telegram commands ('reproduction', 'review', 'takeabreak', 'godark') every second.
+    - Polls for user Telegram commands ('reproduction', 'review', 'reapk', 'takeabreak', 'godark') every second.
     - If 'takeabreak' is received: raises KeyboardInterrupt for safe exit.
     - If 'reproduction' is received: executes reproduction routine in Git PuTTY and resets the 2-minute timer.
     - If 'review' is received: executes review routine in Git PuTTY and resets the 2-minute timer.
+    - If 'reapk' is received: builds and copies APK of main branch in Git PuTTY and resets the 2-minute timer.
     - If 'godark' is received: silences periodic reminders until a new task in pending or re starts.
     - Resumes immediately if new task files appear.
     """
@@ -175,10 +176,14 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
         _is_dark = False
         return True
 
-    initial_merged_names = {f.name for f in config.MERGED_DIR.glob("*.txt")}
+    initial_merged_state = config.get_merged_snapshot()
 
-    if initial_merged_names:
-        print(f"\n[QUEUE] Tasks in re/pending are empty, but branch in merged/ is active. Resting for {interval_seconds}s before re-checking...")
+    if initial_merged_state:
+        print(f"\n[QUEUE] Tasks in re/pending are empty. File(s) in merged/ already checked once; waiting in bunker for new tasks...")
+        if not _is_dark:
+            send_telegram_message("📢 *Comrade Yoan!* Tasks in `re`, `pending`, and `working` are completed!\nWaiting for new tasks...")
+        else:
+            print("[QUEUE] 🤫 Dark mode is active: suppressing initial empty queue Telegram alert.")
     else:
         print(f"\n[QUEUE EMPTY] All task folders (merged, re, pending, working) are empty! Will alert via Telegram every {interval_seconds}s until new task appears.")
         if not _is_dark:
@@ -232,12 +237,25 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
                 else:
                     print("[TELEGRAM] ⚠️ No review handler provided.")
 
-        # Check if new files appeared in re, pending, working, or a NEW file in merged
+            elif cmd in ["reapk", "apk"]:
+                elapsed = 0
+                print(f"\n[TELEGRAM] 📱 Command '{cmd}' received with args: {args}")
+                send_telegram_message("📱 *Orders received!* Building debug APK from `main` branch of `exo-android` in Git PuTTY... ⏳")
+                if reapk_handler:
+                    reapk_handler(git_hwnd, args)
+                else:
+                    print("[TELEGRAM] ⚠️ No reapk handler provided.")
+
+        # Check if new files appeared in re, pending, working, or a NEW / updated file in merged
         curr_re = list(config.RE_DIR.glob("*.txt"))
         curr_pending = list(config.PENDING_DIR.glob("*.txt"))
         curr_working = list(config.WORKING_DIR.glob("*.txt"))
-        curr_merged = list(config.MERGED_DIR.glob("*.txt"))
-        new_merged = [f for f in curr_merged if f.name not in initial_merged_names]
+        curr_merged_state = config.get_merged_snapshot()
+        new_merged = [
+            name for name, mtime in curr_merged_state.items()
+            if name not in initial_merged_state or mtime > initial_merged_state[name]
+        ]
+        initial_merged_state = {k: v for k, v in initial_merged_state.items() if k in curr_merged_state}
 
         if curr_re or curr_pending or curr_working or new_merged:
             if curr_re:
@@ -247,7 +265,7 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
             elif curr_working:
                 found_name = f"working/{curr_working[0].name}"
             else:
-                found_name = f"merged/{new_merged[0].name}"
+                found_name = f"merged/{new_merged[0]}"
             print(f"[QUEUE] Detected task in queue: '{found_name}'! Resuming work...")
             send_telegram_message(f"🚀 *New task detected:* `{found_name}`. Resuming automation!")
             if curr_re or curr_pending or curr_working:
@@ -258,15 +276,12 @@ def wait_for_new_task_or_alert(interval_seconds=60, stop_event=None, git_hwnd: i
         elapsed += 1
         
         if elapsed >= interval_seconds:
-            if initial_merged_names:
-                print(f"[QUEUE] {interval_seconds}s rest completed. Re-checking merged queue...")
-                return True
-            else:
-                if not _is_dark:
-                    send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
+            if not _is_dark:
+                if initial_merged_state:
+                    send_telegram_message("⏳ *Reminder:* Active task queues are empty. Waiting for new tasks or new files in `merged`...")
                 else:
-                    print(f"[QUEUE] 🤫 Dark mode active ({elapsed}s elapsed): periodic reminder suppressed. Machine resting in silence...")
-                elapsed = 0
+                    send_telegram_message("⏳ *Reminder:* All task folders (`merged`, `re`, `pending`) are still empty. Machine is resting in the bunker.")
+            elapsed = 0
 
 if __name__ == "__main__":
     print("Testing Telegram connection...")

@@ -78,13 +78,14 @@ def parse_task_file(file_path: Path, is_new_branch: bool | None = None):
         "prompt": prompt,
         "task_name": file_path.stem,
         "is_exo": "/data/exo-android" in prompt,
-        "has_backend": re.search(r"^Backend:", prompt, re.M) is not None
+        "has_backend": re.search(r"^(?:Backend(?:\s+API)?|Laravel(?:\s+API)?):", prompt, re.M | re.IGNORECASE) is not None
     }
 
 def task_repos(info: dict) -> list[str]:
     """Return repositories list for task. Laravel first if backend present."""
     if not info.get("is_exo"):
-        return [config.SERVER_REPO_DIR]
+        server_repo = config.SERVER_REPO_DIR if (config.SERVER_REPO_DIR and config.SERVER_REPO_DIR != config.EXO_REPO_DIR) else config.DEV_REPO_DIR
+        return [server_repo]
     return ([config.DEV_REPO_DIR] if info.get("has_backend") else []) + [config.EXO_REPO_DIR]
 
 def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repos: list[str] | str = None, is_exo: bool = False, task_name: str = "") -> bool:
@@ -114,6 +115,7 @@ def handle_git_push(git_hwnd: int, branch_name: str, commit_msg: str, repos: lis
             f"-o merge_request.label=exo "
             f"-o merge_request.description=\"EXO task {task_name}. Same branch in yoan/exo-android and yoan/haskovo.net-l13. Merge Laravel first.\" || PUSH_RC=$? ; "
             f"done ; "
+            f"cd {config.DEV_REPO_DIR} ; "
             f"if [ $PUSH_RC -eq 0 ]; then echo '{push_ok_marker}' ; else echo '{push_fail_marker}' ; fi"
         )
     else:
@@ -544,6 +546,120 @@ def handle_review(git_hwnd: int, args: list[str]) -> bool:
     telegram_alert.send_telegram_message(reply_msg)
     return True
 
+def handle_reapk(git_hwnd: int, args: list[str] = None) -> bool:
+    """
+    Builds debug APK of the main branch in /data/exo-android (./gradlew assembleDebug),
+    copies it to /mnt/nvme/exo-apks/ (served at https://development.haskovo.net/exo/),
+    and verifies the APK via HTTP HEAD request before sending link to Telegram.
+    """
+    apk_name = "exo"
+    if args and args[0].strip():
+        cand = args[0].strip().lower()
+        if re.match(r'^[a-z0-9-]+$', cand):
+            apk_name = cand
+
+    uid = f"{int(time.time() * 1000)}_{os.getpid()}"
+    dirty_marker = f"==REAPK_DIRTY_{uid}=="
+    ok_marker = f"==REAPK_OK_{uid}=="
+    fail_marker = f"==REAPK_FAIL_{uid}=="
+
+    apk_url = f"{config.EXO_APK_BASE_URL}{apk_name}.apk"
+
+    cmd = (
+        f"cd {config.EXO_REPO_DIR} && "
+        f"if [ -n \"$(git status --porcelain)\" ]; then echo '{dirty_marker}'; false; fi && "
+        f"git fetch origin main && git checkout main && git pull origin main && "
+        f"./gradlew assembleDebug && "
+        f"mkdir -p /mnt/nvme/exo-apks && "
+        f"cp app/build/outputs/apk/debug/app-debug.apk /mnt/nvme/exo-apks/{apk_name}.apk ; "
+        f"RC=$? ; "
+        f"cd {config.DEV_REPO_DIR} ; "
+        f"if [ $RC -eq 0 ]; then echo '{ok_marker}'; else echo '{fail_marker}'; fi"
+    )
+
+    print(f"\n[REAPK] 🚀 Building APK for branch 'main' in {config.EXO_REPO_DIR} -> /mnt/nvme/exo-apks/{apk_name}.apk...")
+    putty.activate_window(git_hwnd)
+    time.sleep(0.3)
+    putty.paste_text(git_hwnd, cmd, press_enter=True)
+
+    start_time = time.time()
+    username_submitted = False
+    password_submitted = False
+
+    while time.time() - start_time < 360:
+        screen = putty.capture_screen_text(git_hwnd)
+        lines = [l.strip() for l in screen.splitlines() if l.strip()]
+        recent_lines = lines[-25:]
+        last_line = lines[-1].lower() if lines else ""
+
+        # 0. Check dirty marker
+        if any((l == dirty_marker or l == f"'{dirty_marker}'" or l == f'"{dirty_marker}"') for l in recent_lines if not l.startswith("echo ") and "RC=" not in l):
+            print("[REAPK] 🚨 /data/exo-android has uncommitted changes!")
+            telegram_alert.send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* `/data/exo-android` has uncommitted changes! Refusing to switch to `main` to build APK.")
+            return False
+
+        # 1. Check success marker
+        has_ok = any(
+            (l == ok_marker or l == f"'{ok_marker}'" or l == f'"{ok_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and "RC=" not in l and not l.startswith("root@")
+        )
+        if has_ok:
+            print(f"[REAPK] ✅ APK built and copied successfully to /mnt/nvme/exo-apks/{apk_name}.apk!")
+            apk_ok = False
+            try:
+                res = requests.head(apk_url, timeout=10)
+                apk_ok = (res.status_code == 200)
+            except Exception:
+                apk_ok = False
+
+            if apk_ok:
+                msg = f"📱 *EXO APK Ready!* 🚀\nBranch: `main` (`exo-android`)\nAPK: {apk_url}"
+            else:
+                msg = f"✅ Build finished, but HTTP check to {apk_url} returned non-200. Please verify files on server!"
+            telegram_alert.send_telegram_message(msg)
+            return True
+
+        # 2. Check failure marker
+        has_fail = any(
+            (l == fail_marker or l == f"'{fail_marker}'" or l == f'"{fail_marker}"')
+            for l in recent_lines
+            if not l.startswith("echo ") and "RC=" not in l and not l.startswith("root@")
+        )
+        if has_fail:
+            print("[REAPK] ❌ Gradle build or copy failed with non-zero exit code!")
+            telegram_alert.send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* Gradle build or copy of `main` failed! Please check Git PuTTY.")
+            return False
+
+        # 3. Check active prompts on the last visible line
+        is_user_prompt = ("username for" in last_line and last_line.endswith(":"))
+        is_pass_prompt = ("password for" in last_line and last_line.endswith(":"))
+
+        if not is_user_prompt:
+            username_submitted = False
+        if not is_pass_prompt:
+            password_submitted = False
+
+        if is_user_prompt and not username_submitted:
+            print("[REAPK] 🔑 Detected Username prompt! Submitting username...")
+            putty.paste_text(git_hwnd, config.GIT_USERNAME, press_enter=True)
+            username_submitted = True
+            time.sleep(1.0)
+            continue
+
+        if is_pass_prompt and not password_submitted:
+            print("[REAPK] 🔒 Detected Password prompt! Submitting password...")
+            putty.paste_text(git_hwnd, config.GIT_PASSWORD, press_enter=True)
+            password_submitted = True
+            time.sleep(1.5)
+            continue
+
+        time.sleep(1.0)
+
+    print("[REAPK] ⚠️ Build timed out after 360 seconds!")
+    telegram_alert.send_telegram_message("⚠️ *Vnimaniye, Comrade Yoan!* Building APK of `main` timed out after 6 minutes. Check Git PuTTY!")
+    return False
+
 def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watcher: LogWatcher) -> bool:
     """Execute full workflow for a single task directly in detected repository directory."""
     telegram_alert.set_dark_mode(False)
@@ -569,12 +685,17 @@ def process_single_task(task_file: Path, git_hwnd: int, claude_hwnd: int, watche
     is_exo = task_info.get("is_exo", False)
     has_backend = task_info.get("has_backend", False)
 
-    repos = task_repos(task_info)
     if is_exo:
         active_repo_dir = config.EXO_REPO_DIR
     else:
-        active_repo_dir = putty.detect_git_working_dir(git_hwnd) or config.SERVER_REPO_DIR
+        detected_dir = putty.detect_git_working_dir(git_hwnd)
+        if detected_dir and detected_dir != config.EXO_REPO_DIR:
+            active_repo_dir = detected_dir
+        else:
+            active_repo_dir = config.DEV_REPO_DIR
         config.SERVER_REPO_DIR = active_repo_dir
+
+    repos = task_repos(task_info)
 
     print(f"\n=======================================================")
     print(f"🚀 STARTING TASK: {task_name}")
@@ -762,16 +883,29 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
     """
     telegram_alert.init_telegram_listener()
 
+    last_merged_state = {}
+
     while True:
-        # Priority 0: Clean up merged branches first!
-        merged_files = sorted(list(config.MERGED_DIR.glob("*.txt")))
-        if merged_files:
-            detected_dir = putty.detect_git_working_dir(git_hwnd)
-            if detected_dir:
-                config.SERVER_REPO_DIR = detected_dir
-            for m_file in merged_files:
-                handle_merged_branch_cleanup(git_hwnd, m_file, config.SERVER_REPO_DIR)
-                time.sleep(0.5)
+        # Priority 0: Clean up merged branches when new or updated files appear in merged/
+        curr_merged_state = config.get_merged_snapshot()
+        has_new_merged = any(
+            name not in last_merged_state or mtime > last_merged_state[name]
+            for name, mtime in curr_merged_state.items()
+        )
+        if has_new_merged:
+            merged_files = sorted(list(config.MERGED_DIR.glob("*.txt")))
+            if merged_files:
+                detected_dir = putty.detect_git_working_dir(git_hwnd)
+                if detected_dir and detected_dir != config.EXO_REPO_DIR:
+                    config.SERVER_REPO_DIR = detected_dir
+                else:
+                    config.SERVER_REPO_DIR = config.DEV_REPO_DIR
+                for m_file in merged_files:
+                    handle_merged_branch_cleanup(git_hwnd, m_file, config.SERVER_REPO_DIR)
+                    time.sleep(0.5)
+            last_merged_state = config.get_merged_snapshot()
+        else:
+            last_merged_state = {k: v for k, v in last_merged_state.items() if k in curr_merged_state}
 
         re_files = sorted(list(config.RE_DIR.glob("*.txt")))
         pending_files = sorted(list(config.PENDING_DIR.glob("*.txt")))
@@ -832,7 +966,8 @@ def run_task_loop(git_hwnd: int, claude_hwnd: int, watcher: LogWatcher):
                 interval_seconds=60,
                 git_hwnd=git_hwnd,
                 reproduction_handler=handle_reproduction,
-                review_handler=handle_review
+                review_handler=handle_review,
+                reapk_handler=handle_reapk
             )
             if not has_new:
                 break

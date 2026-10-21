@@ -57,11 +57,15 @@ def main():
 
     # Step 2.5: Detect Active Working Directory from Git PuTTY & Position Claude
     detected_dir = putty.detect_git_working_dir(git_hwnd)
-    if detected_dir:
+    if detected_dir and detected_dir != config.EXO_REPO_DIR:
         config.SERVER_REPO_DIR = detected_dir
         print(f"\n[RADAR] 🇷🇺 Active working directory detected from Git PuTTY: {detected_dir}")
     else:
-        print(f"\n[RADAR] ⚠️ Could not detect working directory from Git PuTTY. Using default: {config.SERVER_REPO_DIR}")
+        config.SERVER_REPO_DIR = config.DEV_REPO_DIR
+        if detected_dir == config.EXO_REPO_DIR:
+            print(f"\n[RADAR] ⚠️ Git PuTTY was in {detected_dir} (EXO). Defaulting server repo to: {config.SERVER_REPO_DIR}")
+        else:
+            print(f"\n[RADAR] ⚠️ Could not detect working directory from Git PuTTY. Using default: {config.SERVER_REPO_DIR}")
 
     # Position Claude in the detected directory
     if not args.dry_run:

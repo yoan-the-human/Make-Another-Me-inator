@@ -22,6 +22,13 @@ ARCHIVE_DIR = TASKS_DIR / "archive"
 for folder in [MERGED_DIR, PENDING_DIR, RE_DIR, WORKING_DIR, COMPLETED_DIR, ARCHIVE_DIR]:
     folder.mkdir(parents=True, exist_ok=True)
 
+def get_merged_snapshot() -> dict[str, float]:
+    """Return dict of {filename: mtime} for .txt files in MERGED_DIR."""
+    try:
+        return {f.name: f.stat().st_mtime for f in MERGED_DIR.glob("*.txt")}
+    except Exception:
+        return {}
+
 # Default Server repo root
 SERVER_REPO_DIR = "/data/development"
 DEV_REPO_DIR = "/data/development"          # Laravel (site + API), served at development.haskovo.net

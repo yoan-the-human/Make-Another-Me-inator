@@ -126,6 +126,7 @@ You can message your Telegram bot directly while the script is idling:
 | :--- | :--- |
 | `review <name>` or `/review <name>` | Prepares review for `<name>`. Switches `/data/development` if task touches backend, warns if migration files exist, checks APK link (`https://development.haskovo.net/exo/<name>.apk`), and sends tappable link to Telegram. Resets the 2-minute idle timer. |
 | `review` or `/review` | Lists completed tasks with API / app-only tags and APK links. |
+| `reapk` or `/reapk [name]` | Fetches latest `main` in `/data/exo-android`, runs `./gradlew assembleDebug`, copies the APK to `/mnt/nvme/exo-apks/exo.apk` (or custom name, served at `https://development.haskovo.net/exo/exo.apk`), checks HTTP status, and sends direct download link to Telegram. Resets the 2-minute idle timer. |
 | `reproduction` or `/reproduction` | Runs `cd /data/development && git fetch origin main && git -C ../haskovo.net pull origin main` in Git PuTTY. Automatically handles multiple username/password prompts. Always targets `/data/development` (even for EXO tasks). **Immediately resets the 2-minute idle timer**. |
 | `takeabreak` or `/takeabreak` | Safely stops the automation pipeline immediately, simulating a clean `Ctrl+C` interrupt. |
 | `godark` or `/godark` | Silences periodic queue idle reminders without stopping the automation process. Automatically resumes normal communications when a new job starts in `pending/` or `re/`. |
@@ -164,8 +165,8 @@ For every task file:
    - Runs `/usage` to check session consumption.
    - Runs `/clear <branch>-<3_digit_random>` to rename/save conversation session and leave Claude clean for the next task.
 7. **Idle Loop**:
-   - If `merged/` contains tasks, checks every 2 minutes if the branch can be deleted (`git branch -d`).
-   - Listens for Telegram commands (`reproduction`, `takeabreak`).
+   - When a task file is placed in `merged/`, attempts to delete the local branch (`git branch -d`) once and stops. If the branch is currently active, the file remains in `merged/` and will only be retried when something new appears in `merged/` (no continuous polling).
+   - Listens for Telegram commands (`reproduction`, `review`, `reapk`, `takeabreak`, `godark`).
    - Automatically picks up new tasks as soon as files are added.
 
 ---
