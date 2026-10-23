@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+### [2.1.1](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v2.1.0...v2.1.1) (2026-10-23)
+
+
+### 🐛 Bugs
+
+* weird migration message bug fix ([d77df57](https://github.com/yoan-the-human/Make-Another-Me-inator/commit/d77df5704bc262b65d2f51517f1d94fd2b5e54c0))
+
 ## [2.1.0](https://github.com/yoan-the-human/Make-Another-Me-inator/compare/v2.0.1...v2.1.0) (2026-10-21)
 
 
