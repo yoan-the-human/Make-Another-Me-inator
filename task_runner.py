@@ -482,6 +482,9 @@ def handle_review(git_hwnd: int, args: list[str]) -> bool:
         time.sleep(0.3)
         putty.paste_text(git_hwnd, review_script, press_enter=True)
 
+        def _is_marker(line, marker):
+            return (line == marker or line == f"'{marker}'" or line == f'"{marker}"') and not line.startswith("echo ") and " && echo " not in line and not line.startswith("root@")
+
         start_t = time.time()
         switched = False
         is_dirty = False
@@ -491,17 +494,22 @@ def handle_review(git_hwnd: int, args: list[str]) -> bool:
             screen = putty.capture_screen_text(git_hwnd)
             lines = [l.strip() for l in screen.splitlines() if l.strip()]
             recent = lines[-25:]
-            if any(l == dirty_m for l in recent if not l.startswith("echo ")):
+            if any(_is_marker(l, dirty_m) for l in recent):
                 is_dirty = True
                 break
-            if any(l == ok_m for l in recent if not l.startswith("echo ")):
+            if any(_is_marker(l, fail_m) for l in recent):
+                failed = True
+                break
+            if any(_is_marker(l, mig_end) for l in recent):
                 switched = True
                 captured_lines = lines
                 break
-            if any(l == fail_m for l in recent if not l.startswith("echo ")):
-                failed = True
-                break
             time.sleep(0.5)
+
+        if not is_dirty and not failed and not switched:
+            if any(_is_marker(l, ok_m) for l in lines[-35:]):
+                switched = True
+                captured_lines = lines
 
         if is_dirty:
             dev_status = f"development → ⚠️ /data/development has uncommitted changes, not switching"
@@ -510,13 +518,15 @@ def handle_review(git_hwnd: int, args: list[str]) -> bool:
             mig_files = []
             capturing = False
             for l in captured_lines:
-                if mig_start in l:
+                if _is_marker(l, mig_start):
                     capturing = True
+                    mig_files = []
                     continue
-                if mig_end in l and capturing:
+                if _is_marker(l, mig_end) and capturing:
                     break
                 if capturing and l and not l.startswith("git ") and not l.startswith("echo ") and not l.startswith("root@"):
-                    mig_files.append(l)
+                    if not l.startswith("==") and not l.startswith("Already on") and not l.startswith("Switched to") and not l.startswith("Your branch"):
+                        mig_files.append(l)
             if mig_files:
                 migration_warning = f"\n⚠️ *This branch has migrations:* `{', '.join(mig_files)}`.\nRun them yourself (`php artisan migrate --path=...`) before testing."
         else:
